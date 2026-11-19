@@ -1,0 +1,1 @@
+Buongiorno {nome} la contattiamo da Cascina Nascosta per la sua prenotazione {giorno} a {pasto} per {ospiti} persone alle ore {orario}. Può gentilmente darci conferma? Il team di Cascina Nascosta.

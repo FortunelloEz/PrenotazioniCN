@@ -1,0 +1,44 @@
+# --- Ambiente e cache ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# --- IDE ---
+.idea/
+*.iml
+.claude/settings.local.json
+
+# --- Build e installer (Output/ conserva tutti gli installer storici, fuori dal repo) ---
+build/
+dist/
+Output/
+
+# --- Copie vecchie del progetto ---
+bkp/
+Nuova cartella/
+
+# --- SEGRETI: mai nel repository ---
+config/
+# ...tranne i file di fabbrica copiati dall'installer (config.json qui è "{}", senza valori)
+!installer_files/config/
+tokens_generati.json
+gptkey.txt
+*.key
+
+# --- DATI DEI CLIENTI: mai nel repository ---
+prenotazioni_wa.html
+*.pdf
+*.csv
+*.xlsx
+*.xls
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.tif
+*.webp
+
+# --- Prodotti delle verifiche (screenshot, report temporanei) ---
+tests/_out/

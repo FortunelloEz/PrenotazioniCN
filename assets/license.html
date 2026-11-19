@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Attivazione</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+          font-family: system-ui, -apple-system, Arial, sans-serif;
+          background: #f4f6fb;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          padding: 24px;
+        }
+        .card {
+          background: white;
+          border-radius: 12px;
+          padding: 32px 28px;
+          width: 100%;
+          max-width: 420px;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+        }
+        h1 { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #1a1a2e; }
+        p  { font-size: 13px; color: #666; margin-bottom: 20px; }
+        input {
+          width: 100%;
+          padding: 10px 12px;
+          font-size: 14px;
+          border: 1px solid #ccc;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          letter-spacing: 1px;
+        }
+        button {
+          width: 100%;
+          padding: 11px;
+          background: #1a56db;
+          color: white;
+          font-size: 14px;
+          font-weight: 600;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+        }
+        button:hover { background: #1648c0; }
+        button:disabled { background: #93b4f0; cursor: not-allowed; }
+        #msg {
+          margin-top: 12px;
+          font-size: 13px;
+          min-height: 18px;
+          text-align: center;
+        }
+        .ok  { color: #166534; }
+        .err { color: #b91c1c; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>🔑 Inserisci la tua licenza</h1>
+    <p>Hai ricevuto un codice di attivazione. Inseriscilo qui sotto per sbloccare l'applicazione.</p>
+    <input id="tokenInput" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" />
+    <button id="btnActivate">Attiva</button>
+    <div id="msg"></div>
+</div>
+
+<script>
+    const btn   = document.getElementById("btnActivate");
+    const input = document.getElementById("tokenInput");
+    const msg   = document.getElementById("msg");
+
+    btn.addEventListener("click", async () => {
+      const token = input.value.trim();
+      if (!token) {
+        msg.className = "err";
+        msg.textContent = "Inserisci un codice di attivazione.";
+        return;
+      }
+
+      btn.disabled = true;
+      msg.className = "";
+      msg.textContent = "Verifica in corso...";
+
+      try {
+        const result = await window.pywebview.api.insert_license(token);
+        if (result.ok) {
+          msg.className = "ok";
+          msg.textContent = `✅ Licenza attivata! Scade il ${result.expires}. Riavvia l'applicazione.`;
+          btn.textContent = "Riavvia";
+          btn.disabled = false;
+          btn.onclick = () => location.reload();
+        } else {
+          msg.className = "err";
+          msg.textContent = "❌ " + (result.error || "Token non valido.");
+          btn.disabled = false;
+        }
+      } catch(e) {
+        msg.className = "err";
+        msg.textContent = "Errore di comunicazione con il backend.";
+        btn.disabled = false;
+      }
+    });
+
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") btn.click();
+    });
+</script>
+</body>
+</html>
