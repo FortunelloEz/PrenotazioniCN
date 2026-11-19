@@ -101,3 +101,34 @@ def test_esporta_html_non_usa_la_cartella_corrente(api, tmp_path, monkeypatch):
 
 def test_template_info(api):
     assert api.get_template_info()["fields"] == ["nome", "giorno", "pasto", "ospiti", "persone", "orario"]
+
+
+def test_avvio_senza_licenza(monkeypatch, tmp_path):
+    """Licenza disattivata: start() non la controlla, non contatta il server e apre l'app."""
+    import webview
+    from types import SimpleNamespace
+
+    def _vietato(*_a, **_k):
+        raise AssertionError("check_license non deve essere chiamato")
+    monkeypatch.setattr(L, "check_license", _vietato)
+    monkeypatch.setattr(L, "prepare_data_dir", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(L, "migrate_api_key", lambda: False)
+    finestre = []
+
+    def _create_window(**kw):
+        finestre.append(kw)
+        w = SimpleNamespace(events=SimpleNamespace(closing=_Handlers()))
+        return w
+
+    class _Handlers(list):
+        def __iadd__(self, h):
+            self.append(h)
+            return self
+
+    monkeypatch.setattr(webview, "screens", [SimpleNamespace(width=1600, height=900)])
+    monkeypatch.setattr(webview, "create_window", lambda title, **kw: _create_window(title=title, **kw))
+    monkeypatch.setattr(webview, "start", lambda *a, **k: None)
+    M.start()
+    assert len(finestre) == 1
+    assert finestre[0]["title"] == "Cascina Nascosta - Prenotazioni"
+    assert finestre[0]["url"].endswith("index.html")

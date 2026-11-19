@@ -1015,6 +1015,7 @@ async function refreshStatusBar() {
             dotApi.classList.toggle("green", !!st.api_key);
             dotApi.classList.toggle("red", !st.api_key);
         }
+        // LICENZA DISATTIVATA: gli elementi non sono più in index.html, quindi qui non succede nulla
         const sbLicense = document.getElementById("sbLicense");
         const expLabel = document.getElementById("license-expires-label");
         if (st.license_expires) {

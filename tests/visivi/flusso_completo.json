@@ -6,7 +6,7 @@
   {"wait": 1200},
   {"shot": "01_vuoto_1600"},
   {"eval": "document.getElementById('sbApi').textContent", "expect": "Chiave ChatGPT configurata", "label": "barra stato chiave"},
-  {"eval": "document.getElementById('sbLicense').textContent", "expect": "Licenza attiva fino al 31/12/2099", "label": "barra stato licenza"},
+  {"eval": "document.getElementById('sbLicense') === null && document.getElementById('license-expires-label') === null", "expect": true, "label": "licenza disattivata: nessuna scritta"},
   {"eval": "document.getElementById('templateVarsHelp').textContent", "expect": "{nome}, {giorno}, {pasto}, {ospiti}, {persone}, {orario}", "label": "variabili template dal backend"},
   {"eval": "document.getElementById('date-badge').textContent.startsWith('Oggi: ')", "expect": true, "label": "badge data = oggi"},
   {"eval": "document.getElementById('superbDateInput').value === (()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})()", "expect": true, "label": "data Superb = oggi locale"},

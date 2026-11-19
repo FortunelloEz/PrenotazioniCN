@@ -5,8 +5,9 @@ from tkinter.filedialog import askopenfilename
 import json
 import webbrowser
 import logicaBE
-from logicaBE import (load_template, load_config, update_config, check_license, save_license_token,
+from logicaBE import (load_template, load_config, update_config, save_license_token,
                       ConfigError, TemplateError)
+# from logicaBE import check_license   # LICENZA DISATTIVATA (vedi start())
 import sys
 import subprocess
 import os
@@ -318,22 +319,32 @@ def start():
     logicaBE.prepare_data_dir()
     logicaBE.migrate_api_key()
 
-    # ── Controllo licenza all'avvio ──
-    ok, msg = check_license()
-    if not ok:
-        # Mostra finestra di attivazione invece dell'app principale
-        license_html = get_html_path().parent / "license.html"
-        webview.create_window(
-            title="Attivazione licenza",
-            url=str(license_html),
-            js_api=api,
-            width=480,
-            height=340,
-            resizable=False
-        )
-        webview.start()
-        return
-    # ── Fine controllo licenza ──
+    # ── LICENZA DISATTIVATA (19/11/2026, su richiesta del titolare) ──────────────────
+    # Il sistema licenze resta tutto nel codice ma non blocca più l'avvio e non contatta
+    # più il server. Come funzionava:
+    #   - genera_token.py crea i codici (in tokens_generati.json); hash + scadenza vanno
+    #     caricati a mano sul server licenze (logicaBE.LICENSE_SERVER_URL);
+    #   - all'avvio check_license() manda l'hash del codice salvato in config e riceve
+    #     {valid, expires}; verifica online al massimo una volta al giorno, offline vale la
+    #     scadenza in cache; senza licenza valida si apre assets/license.html.
+    # Per riattivarla: togliere il commento a questo blocco e all'import di check_license,
+    # e rimettere in index.html/app.js le scritte della licenza (cercare «LICENZA DISATTIVATA»).
+    #
+    # ok, msg = check_license()
+    # if not ok:
+    #     # Mostra finestra di attivazione invece dell'app principale
+    #     license_html = get_html_path().parent / "license.html"
+    #     webview.create_window(
+    #         title="Attivazione licenza",
+    #         url=str(license_html),
+    #         js_api=api,
+    #         width=480,
+    #         height=340,
+    #         resizable=False
+    #     )
+    #     webview.start()
+    #     return
+    # ── Fine licenza disattivata ──
 
     window = webview.create_window(
         title="Cascina Nascosta - Prenotazioni",
