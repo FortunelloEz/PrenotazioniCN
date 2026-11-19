@@ -12,12 +12,12 @@ AppId=PrenotazioniCN
 AppName=PrenotazioniCN
 
 ;QUI alzi la versione quando fai un update
-AppVersion=2.1.0
+AppVersion=2.2.0
 
 ; installazione proposta in C:\CascinaNascosta
 DefaultDirName={sd}\CascinaNascosta
 DefaultGroupName=Prenotazioni CN
-OutputBaseFilename=PrenotazioniCNSetup_2_1_0
+OutputBaseFilename=PrenotazioniCNSetup_2_2_0
 Compression=lzma
 SolidCompression=yes
 DisableDirPage=yes              
