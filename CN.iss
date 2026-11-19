@@ -1,17 +1,23 @@
 ; PrenotazioniCN.iss
 
+; Cartella della build PyInstaller. Predefinita: dist\PrenotazioniCN.
+; Si può cambiare senza toccare dist/:  ISCC /DDistDir="C:\percorso\PrenotazioniCN" CN.iss
+#ifndef DistDir
+  #define DistDir "dist\PrenotazioniCN"
+#endif
+
 [Setup]
 ;fisso, così tutte le versioni sono la stessa app
 AppId=PrenotazioniCN            
 AppName=PrenotazioniCN
 
 ;QUI alzi la versione quando fai un update
-AppVersion=2.0.0
+AppVersion=2.1.0
 
 ; installazione proposta in C:\CascinaNascosta
 DefaultDirName={sd}\CascinaNascosta
 DefaultGroupName=Prenotazioni CN
-OutputBaseFilename=PrenotazioniCNSetup_2_0_0
+OutputBaseFilename=PrenotazioniCNSetup_2_1_0
 Compression=lzma
 SolidCompression=yes
 DisableDirPage=yes              
@@ -19,7 +25,7 @@ DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\PrenotazioniCN.exe
 
 [Files]
-Source: "dist\PrenotazioniCN\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Template utente modificabile (non sovrascrivere se già esiste)
 Source: "installer_files\config\template.txt"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist
