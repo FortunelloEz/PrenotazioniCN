@@ -346,14 +346,14 @@ function renderRecentPdfs() {
     if (!box) return;
 
     if (!recentPdfs.length) {
-        box.innerHTML = "";
+        box.innerHTML = '<div class="nav-empty">Nessun file aperto</div>';
         return;
     }
 
     box.innerHTML = recentPdfs.map((p, idx) => {
         const name = escapeHtml(p.split(/[/\\]/).pop());
         return `<button type="button" onclick="selectRecentPdf(${idx})" title="${escapeHtml(p)}">
-            <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;flex-shrink:0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <svg class="icon-12" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             ${name}
         </button>`;
     }).join("");
@@ -365,6 +365,7 @@ function selectRecentPdf(index) {
     if (!path) return;
 
     pdfPath = path;
+    setOpenFileEnabled(true);
 
     const statusEl = document.getElementById("status");
     if (statusEl) {
@@ -405,21 +406,41 @@ const TODAY_BADGE_TEXT = (() => {
     return "Oggi: " + days[now.getDay()] + " " + now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear();
 })();
 
+// «Apri file» ha senso solo dopo aver scelto un file
+function setOpenFileEnabled(on) {
+    const b = document.getElementById("btnOpenLoadedFile");
+    if (b) b.disabled = !on;
+}
+
+// Le righe "entrano" con un'animazione solo quando arrivano dati nuovi (non a ogni modifica)
+let animateNextRender = false;
+
+// Aggiorna un numero delle statistiche; se cambia, piccolo movimento
+function setStat(el, value) {
+    if (!el) return;
+    const v = String(value);
+    if (el.textContent === v) return;
+    el.textContent = v;
+    el.classList.remove("bump");
+    void el.offsetWidth;   // riavvia l'animazione
+    el.classList.add("bump");
+}
+
 // Statistiche, data di servizio e barra di stato calcolate sui dati finali
 function updateSummary() {
     const n = currentData.length;
     const statCount = document.getElementById("statCount");
     const statGuests = document.getElementById("statGuests");
     const statChats = document.getElementById("statChats");
-    if (statCount) statCount.textContent = n;
+    setStat(statCount, n);
     if (statGuests) {
         const nums = currentData.map(r => guestsNumber(r.ospiti));
         const total = nums.reduce((s, x) => s + (x || 0), 0);
         const missing = nums.filter(x => x === null).length;
-        statGuests.textContent = total;
+        setStat(statGuests, total);
         statGuests.title = missing ? `${missing} prenotazioni senza numero di ospiti` : "";
     }
-    if (statChats) statChats.textContent = currentData.filter(r => r.chatOpened).length;
+    setStat(statChats, currentData.filter(r => r.chatOpened).length);
 
     const badge = document.getElementById("date-badge");
     if (badge) {
@@ -533,11 +554,11 @@ function renderTable(data) {
         const label = escapeHtml(col.charAt(0).toUpperCase() + col.slice(1));
         if (col === "pasto") {
             html += `<th><div class="filter-header"><span>${label}</span>
-                <button type="button" class="filter-toggle" data-target="mealFilterBox">▼</button></div>
+                <button type="button" class="filter-toggle${mealSelectedValues.length ? " is-active" : ""}" data-target="mealFilterBox" title="Filtra per pasto" aria-label="Filtra per pasto"><svg viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></button></div>
                 <div class="filter-box" id="mealFilterBox">${mealOptionsHtml || "<em>—</em>"}</div></th>`;
         } else if (col === "stato") {
             html += `<th><div class="filter-header"><span>${label}</span>
-                <button type="button" class="filter-toggle" data-target="statusFilterBox">▼</button></div>
+                <button type="button" class="filter-toggle${statusSelectedValues.length ? " is-active" : ""}" data-target="statusFilterBox" title="Filtra per stato" aria-label="Filtra per stato"><svg viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></button></div>
                 <div class="filter-box" id="statusFilterBox">${statusOptionsHtml || "<em>—</em>"}</div></th>`;
         } else {
             html += `<th>${label}</th>`;
@@ -548,7 +569,7 @@ function renderTable(data) {
     currentData.forEach((r, index) => {
             const hasNote = ["note", "note_ospiti", "allergie"].some(k => r[k] && String(r[k]).trim());
 
-            html += `<tr>`;
+            html += animateNextRender ? `<tr class="row-in" style="animation-delay:${Math.min(index, 14) * 22}ms">` : `<tr>`;
             colonneVisibili.forEach(col => {
                 const val = r[col] ?? "";
                 const valStr = escapeHtml(String(val));
@@ -566,7 +587,8 @@ function renderTable(data) {
                     const custom = pasto && !standard.includes(pasto)
                         ? `<option value="${valStr}" selected>${valStr}</option>` : "";
                     const missing = !pasto ? " td-missing" : "";
-                    html += `<td><select onchange="updateRowMeal(${index}, this.value)" class="td-select${missing}"
+                    const mealKey = !pasto ? "nessuno" : (standard.includes(pasto) ? pasto : "custom");
+                    html += `<td><select onchange="updateRowMeal(${index}, this.value)" class="td-select${missing}" data-pasto="${mealKey}"
                         title="${pasto ? "" : "Pasto non riconosciuto dall'orario: sceglilo qui."}">
                         <option value="" ${pasto ? "" : "selected"}>auto</option>
                         ${standard.map(s => `<option value="${s}" ${pasto === s ? "selected" : ""}>${s}</option>`).join("")}
@@ -601,6 +623,7 @@ function renderTable(data) {
     `;
 
     container.innerHTML = html;
+    animateNextRender = false;
 
     updateSummary();
     const dotFile = document.getElementById("dotFile");
@@ -751,6 +774,7 @@ if (btnLoad) {
             if (dotFile) dotFile.classList.add("green");
 
             addRecentPdf(res);
+            setOpenFileEnabled(true);
         } else {
             document.getElementById("status").textContent = "Operazione annullata";
         }
@@ -780,6 +804,7 @@ if (btnProcess) {
         try {
             const result = await window.pywebview.api.processa_pdf(pdfPath, selectedDay);
             setTableDirty(false);
+            animateNextRender = true;
             renderTable(result);
             setStatus(result && result.length
                 ? `Elaborazione completata: ${result.length} prenotazioni.`
@@ -950,6 +975,12 @@ function applyTableFilters() {
 
         row.style.display = visible ? "" : "none";
     });
+
+    // icona del filtro accesa quando il filtro è attivo
+    const mealBtn = table.querySelector('[data-target="mealFilterBox"]');
+    const statusBtn = table.querySelector('[data-target="statusFilterBox"]');
+    if (mealBtn) mealBtn.classList.toggle("is-active", !!(mealActive && mealActive.length));
+    if (statusBtn) statusBtn.classList.toggle("is-active", !!(statusActive && statusActive.length));
 }
 
 function setStatus(message) {
@@ -1463,6 +1494,7 @@ async function initSuperbBar() {
 
             const result = await window.pywebview.api.processa_superb(dateStr, giorno);
             setTableDirty(false);
+            animateNextRender = true;
             renderTable(result);
             setStatus(result.length ? "Prenotazioni Superb caricate." : "Superb: nessuna prenotazione per la data scelta.");
             if (statusEl) statusEl.textContent = `${result.length} prenotazioni`;

@@ -11,11 +11,13 @@
   {"eval": "document.getElementById('date-badge').textContent.startsWith('Oggi: ')", "expect": true, "label": "badge data = oggi"},
   {"eval": "document.getElementById('superbDateInput').value === (()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})()", "expect": true, "label": "data Superb = oggi locale"},
   {"eval": "document.querySelector('#btnOpenAllChats').disabled && document.querySelector('#btnExportHtml').disabled", "expect": true, "label": "pulsanti disattivati senza dati"},
+  {"eval": "document.getElementById('btnOpenLoadedFile').disabled", "expect": true, "label": "Apri file disattivato senza file"},
 
   {"log": "2. Errore LLM con tabella vuota"},
   {"scenario": {"llm": "json_rotto"}},
   {"click": "#btnLoad"},
   {"wait": 300},
+  {"eval": "document.getElementById('btnOpenLoadedFile').disabled", "expect": false, "label": "Apri file attivo dopo la scelta"},
   {"click": "#btnProcess"},
   {"wait": 900},
   {"shot": "02_errore_llm_1600"},
