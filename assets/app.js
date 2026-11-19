@@ -110,6 +110,42 @@ function hasApi() {
     return !!(window.pywebview && window.pywebview.api);
 }
 
+// Unico punto che cambia tableDirty: lo comunica anche al backend, che lo usa
+// per chiedere conferma quando si chiude la finestra.
+function setTableDirty(v) {
+    tableDirty = !!v;
+    if (hasApi() && window.pywebview.api.set_modifiche_in_sospeso) {
+        window.pywebview.api.set_modifiche_in_sospeso(tableDirty).catch(e => console.warn(e));
+    }
+}
+
+// Chiamata dal backend quando si prova a chiudere la finestra con modifiche in sospeso
+let closeDialogOpen = false;
+window.chiediConfermaChiusura = async function () {
+    if (closeDialogOpen) return;
+    closeDialogOpen = true;
+    try {
+        try { await window.pywebview.api.ack_chiusura(); } catch (e) { console.warn(e); }
+        const aperte = currentData.filter(r => r.chatOpened).length;
+        const details = [];
+        if (aperte) details.push(`${aperte} chat risultano aperte: alla riapertura il segno verde non ci sarà più.`);
+        details.push("Le modifiche fatte a mano nella tabella non vengono salvate.");
+        const ok = await ui.confirm({
+            title: "Chiudere PrenotazioniCN?",
+            message: "La tabella ha modifiche o chat segnate che si perdono chiudendo.",
+            details,
+            confirmLabel: "Chiudi senza salvare",
+            danger: true,
+        });
+        if (ok) await window.pywebview.api.conferma_chiusura();
+        else await window.pywebview.api.annulla_chiusura();
+    } catch (e) {
+        console.warn(e);
+    } finally {
+        closeDialogOpen = false;
+    }
+};
+
 // Prima di sostituire la tabella: se contiene modifiche o chat aperte, chiede conferma.
 async function confirmDiscardTable() {
     if (!tableDirty || !currentData || currentData.length === 0) return true;
@@ -680,7 +716,7 @@ async function openChatAndCopyMessage(index, event) {
         }
 
         rec.chatOpened = true;
-        tableDirty = true;
+        setTableDirty(true);
         if (btn) {
             btn.classList.add("btn-chat-sent");
             btn.textContent = "Aperta";
@@ -743,7 +779,7 @@ if (btnProcess) {
 
         try {
             const result = await window.pywebview.api.processa_pdf(pdfPath, selectedDay);
-            tableDirty = false;
+            setTableDirty(false);
             renderTable(result);
             setStatus(result && result.length
                 ? `Elaborazione completata: ${result.length} prenotazioni.`
@@ -826,7 +862,7 @@ async function updateRowMeal(index, newPasto) {
     if (!currentData || !currentData[index]) return;
     const rec = currentData[index];
     rec.chatOpened = false;
-    tableDirty = true;
+    setTableDirty(true);
     const standard = ["pranzo", "cena", "aperitivo"];
     if (standard.includes(newPasto) || !newPasto) {
         // scelta standard o «auto»: l'esperienza personalizzata di questa riga non vale più
@@ -840,7 +876,7 @@ async function updateRowName(index, newName) {
     if (!currentData || !currentData[index]) return;
     const rec = currentData[index];
     rec.chatOpened = false;
-    tableDirty = true;
+    setTableDirty(true);
     rec.nome = newName || "";
     await recalcAllAndRender();
 }
@@ -849,7 +885,7 @@ async function updateRowPhone(index, newPhone) {
     if (!currentData || !currentData[index]) return;
     const rec = currentData[index];
     rec.chatOpened = false;
-    tableDirty = true;
+    setTableDirty(true);
     // La normalizzazione (+39 ai cellulari senza prefisso, 00 → +) è fatta SOLO dal backend
     rec.telefono = (newPhone || "").trim();
     rec.telefono_wa = "";
@@ -969,7 +1005,12 @@ async function refreshStatusBar() {
         const st = await window.pywebview.api.get_stato_app();
         const dotApi = document.getElementById("dotApi");
         const sbApi = document.getElementById("sbApi");
-        if (sbApi) sbApi.textContent = st.api_key ? "Chiave ChatGPT configurata" : "Chiave ChatGPT non configurata";
+        if (sbApi) {
+            sbApi.textContent = !st.api_key ? "Chiave ChatGPT non configurata"
+                : st.api_key_cifrata ? "Chiave ChatGPT configurata (cifrata)" : "Chiave ChatGPT configurata";
+        }
+        const sbBar = document.getElementById("statusbar");
+        if (sbBar && st.cartella_dati) sbBar.title = "Dati e configurazione in: " + st.cartella_dati;
         if (dotApi) {
             dotApi.classList.toggle("green", !!st.api_key);
             dotApi.classList.toggle("red", !st.api_key);
@@ -1116,7 +1157,7 @@ function openCustomDayDialog() {
         currentData.forEach(rec => {
             rec.giorno = val;
         });
-        tableDirty = true;
+        setTableDirty(true);
         closeSettingsModal();
         await recalcAllAndRender();
         setStatus(`Giorno impostato a "${val}" per tutte le prenotazioni.`);
@@ -1223,7 +1264,7 @@ function openCustomMealDialog() {
         currentData.forEach(rec => {
             rec.pasto_personalizzato = val;
         });
-        tableDirty = true;
+        setTableDirty(true);
         closeSettingsModal();
         await recalcAllAndRender();
         setStatus(`Esperienza impostata a "${val}" per tutte le prenotazioni.`);
@@ -1319,7 +1360,7 @@ function openCustomMealDialog() {
 
                 if (res && res.ok) {
                     rec.chatOpened = true;
-                    tableDirty = true;
+                    setTableDirty(true);
                     aperte++;
                     const chatBtn = document.getElementById(`btnChat_${idx}`);
                     if (chatBtn) {
@@ -1420,7 +1461,7 @@ async function initSuperbBar() {
             const giorno = sel ? (sel.value || null) : null;
 
             const result = await window.pywebview.api.processa_superb(dateStr, giorno);
-            tableDirty = false;
+            setTableDirty(false);
             renderTable(result);
             setStatus(result.length ? "Prenotazioni Superb caricate." : "Superb: nessuna prenotazione per la data scelta.");
             if (statusEl) statusEl.textContent = `${result.length} prenotazioni`;

@@ -64,6 +64,7 @@ def _isola_config(L, tmp: Path) -> None:
     for name in ("template.txt", "template_default.txt"):
         shutil.copy2(ROOT / "installer_files" / "config" / name, cfg / name)
     L.BASE_DIR = tmp
+    L.DATA_DIR = tmp
     L.CONFIG_DIR = cfg
     L.CONFIG_FILE = cfg / "config.json"
     L.TEMPLATE_FILE = cfg / "template.txt"

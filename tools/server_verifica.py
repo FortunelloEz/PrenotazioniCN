@@ -55,6 +55,7 @@ for name in ("template.txt", "template_default.txt"):
     "superb_restaurant_id": "RIST-FINTO",
 }), encoding="utf-8")
 L.BASE_DIR = TMP
+L.DATA_DIR = TMP
 L.CONFIG_DIR = CFG
 L.CONFIG_FILE = CFG / "config.json"
 L.TEMPLATE_FILE = CFG / "template.txt"
@@ -156,7 +157,8 @@ def _startfile(target):
         REGISTRO["file"].append(target)
 
 
-M.winreg.OpenKey = _open_key
+# winreg finto SOLO per main.py: il modulo vero serve a pywebview
+M.winreg = SimpleNamespace(OpenKey=_open_key, HKEY_CLASSES_ROOT=M.winreg.HKEY_CLASSES_ROOT)
 M.os.startfile = _startfile
 M.webbrowser.open = lambda u: REGISTRO["browser"].append(u)
 

@@ -7,17 +7,74 @@ import webbrowser
 import logicaBE
 from logicaBE import (load_template, load_config, update_config, check_license, save_license_token,
                       ConfigError, TemplateError)
-import base64
 import sys
 import subprocess
 import os
+import threading
+import time
 import winreg
 from urllib.parse import quote
+
+# Se la finestra non mostra la conferma di chiusura entro questo tempo (JS bloccato),
+# il secondo tentativo di chiusura passa: l'utente non deve mai restare chiuso dentro.
+CLOSE_ACK_TIMEOUT_S = 2.0
+
+
 class Api:
 
     def __init__(self):
         self.last_html_path: Path | None = None
         self.last_loaded_file: Path | None = None
+        # guardia alla chiusura
+        self._window = None
+        self._dirty = False
+        self._close_ok = False
+        self._close_asked_at: float | None = None
+        self._close_acked = False
+
+    # ── chiusura con modifiche non salvate ──
+    def set_modifiche_in_sospeso(self, flag: bool) -> dict:
+        self._dirty = bool(flag)
+        return {"ok": True}
+
+    def ack_chiusura(self) -> dict:
+        """Il JS conferma di aver mostrato la finestra «Chiudere?»."""
+        self._close_acked = True
+        return {"ok": True}
+
+    def annulla_chiusura(self) -> dict:
+        self._close_asked_at = None
+        self._close_acked = False
+        return {"ok": True}
+
+    def conferma_chiusura(self) -> dict:
+        self._close_ok = True
+        w = self._window
+        if w is not None:
+            def _chiudi():
+                time.sleep(0.3)   # prima arriva al JS la risposta di questa chiamata, poi si chiude
+                w.destroy()
+            threading.Thread(target=_chiudi, daemon=True).start()
+        return {"ok": True}
+
+    def _on_closing(self):
+        """Gestore di window.events.closing: False = annulla la chiusura."""
+        if self._close_ok or not self._dirty:
+            return None
+        now = time.monotonic()
+        if (self._close_asked_at is not None and not self._close_acked
+                and now - self._close_asked_at > CLOSE_ACK_TIMEOUT_S):
+            return None   # valvola di sicurezza: il JS non ha risposto, si chiude
+        self._close_asked_at = now
+        self._close_acked = False
+        w = self._window
+        if w is not None:
+            # mai aspettare il JS qui: siamo sul thread della finestra
+            threading.Thread(
+                target=lambda: w.run_js("window.chiediConfermaChiusura && window.chiediConfermaChiusura()"),
+                daemon=True,
+            ).start()
+        return False
 
     def apri_file_caricato(self) -> dict:
         try:
@@ -79,10 +136,10 @@ class Api:
         if not key:
             return {"ok": False, "error": "Chiave vuota: nessuna modifica applicata."}
         try:
-            # NB: base64 non è cifratura (vedi CLAUDE.md, punto aperto). Formato invariato per compatibilità.
-            update_config({"api_key_encrypted": base64.b64encode(key.encode()).decode()})
-        except ConfigError as e:
-            return {"ok": False, "error": str(e)}
+            changes, remove = logicaBE.api_key_config_changes(key)   # DPAPI su Windows
+            update_config(changes, remove=remove)
+        except (ConfigError, OSError) as e:
+            return {"ok": False, "error": f"Chiave non salvata: {e}"}
         logicaBE.reset_client()  # la prossima elaborazione usa già la nuova chiave
         return {"ok": True, "message": "Chiave ChatGPT salvata: è già attiva."}
 
@@ -131,13 +188,23 @@ class Api:
     def get_stato_app(self) -> dict:
         """Stato reale per la barra in basso (prima i testi erano fissi nell'HTML)."""
         cfg = load_config()
-        has_key = bool(str(cfg.get("api_key_encrypted") or "").strip()) or bool(logicaBE.load_api_key_legacy())
+        has_key = bool(logicaBE.load_api_key_new()) or bool(logicaBE.load_api_key_legacy())
+        warnings = [w for w in (logicaBE.get_data_warning(), logicaBE.get_config_warning()) if w]
         return {
             "api_key": has_key,
+            "api_key_cifrata": bool(str(cfg.get("api_key_dpapi") or "").strip()),
             "license_expires": str(cfg.get("license_expires") or ""),
             "has_license": bool(str(cfg.get("license_token") or "").strip()),
-            "config_warning": logicaBE.get_config_warning(),
+            "config_warning": " ".join(warnings) or None,
+            "cartella_dati": str(logicaBE.DATA_DIR),
         }
+
+    def apri_cartella_dati(self) -> dict:
+        try:
+            os.startfile(str(logicaBE.DATA_DIR))
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def chiudi_finestra(self) -> dict:
         try:
@@ -216,7 +283,7 @@ class Api:
             # Se non abbiamo ancora un path, stesso file usato dall'elaborazione
             # (prima era relativo alla cartella corrente, che può essere qualsiasi)
             if self.last_html_path is None:
-                self.last_html_path = logicaBE.BASE_DIR / "prenotazioni_wa.html"
+                self.last_html_path = logicaBE.DATA_DIR / "prenotazioni_wa.html"
 
             logicaBE.save_html(records, self.last_html_path)
             webbrowser.open(self.last_html_path.as_uri())
@@ -246,6 +313,11 @@ def start():
 
     html_path = get_html_path()
 
+    # ── Cartella dati utente (%APPDATA%\PrenotazioniCN) e chiave cifrata ──
+    # Copia verificata della vecchia config; l'originale resta. Poi chiave base64 → DPAPI.
+    logicaBE.prepare_data_dir()
+    logicaBE.migrate_api_key()
+
     # ── Controllo licenza all'avvio ──
     ok, msg = check_license()
     if not ok:
@@ -263,7 +335,7 @@ def start():
         return
     # ── Fine controllo licenza ──
 
-    webview.create_window(
+    window = webview.create_window(
         title="Cascina Nascosta - Prenotazioni",
         url=str(html_path),
         js_api=api,
@@ -273,6 +345,8 @@ def start():
         y=y,
         resizable=True
     )
+    api._window = window
+    window.events.closing += api._on_closing
 
     webview.start()
 

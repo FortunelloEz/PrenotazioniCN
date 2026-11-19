@@ -36,6 +36,8 @@ def cfg_dir(tmp_path, monkeypatch):
     for name in ("template.txt", "template_default.txt", "config.json"):
         shutil.copy2(FACTORY_CONFIG / name, d / name)
     monkeypatch.setattr(L, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(L, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(L, "_DATA_WARNING", None)
     monkeypatch.setattr(L, "CONFIG_DIR", d)
     monkeypatch.setattr(L, "CONFIG_FILE", d / "config.json")
     monkeypatch.setattr(L, "TEMPLATE_FILE", d / "template.txt")

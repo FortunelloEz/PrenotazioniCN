@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import logicaBE as L
 import main as M
 
 
@@ -55,7 +56,11 @@ def test_set_api_key(api, cfg_dir):
     assert res["ok"] is True
     cfg = json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))
     assert cfg["license_token"] == "T"
-    assert base64.b64decode(cfg["api_key_encrypted"]).decode() == "sk-finta"
+    # cifrata con DPAPI: niente base64 in chiaro, e si rilegge uguale
+    assert "api_key_encrypted" not in cfg
+    assert "sk-finta" not in json.dumps(cfg)
+    assert base64.b64encode(b"sk-finta").decode() not in json.dumps(cfg)
+    assert L.load_api_key_new() == "sk-finta"
 
 
 def test_stato_app(api, cfg_dir):
@@ -63,7 +68,10 @@ def test_stato_app(api, cfg_dir):
     (cfg_dir / "config.json").write_text(json.dumps({"api_key_encrypted": "eA==", "license_token": "T",
                                                      "license_expires": "2099-01-01"}), encoding="utf-8")
     st = api.get_stato_app()
-    assert st == {"api_key": True, "license_expires": "2099-01-01", "has_license": True, "config_warning": None}
+    chiavi = ("api_key", "api_key_cifrata", "license_expires", "has_license", "config_warning")
+    atteso = {"api_key": True, "api_key_cifrata": False, "license_expires": "2099-01-01",
+              "has_license": True, "config_warning": None}
+    assert {k: st[k] for k in chiavi} == atteso
 
 
 def test_stato_app_segnala_config_danneggiata(api, cfg_dir):

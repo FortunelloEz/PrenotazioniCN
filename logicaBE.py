@@ -44,13 +44,103 @@ def get_base_dir() -> Path:
     # In sviluppo: cartella del file .py
     return Path(__file__).resolve().parent
 
-#Directories
+# ───────────────────────────────────────────────
+# CARTELLE
+# BASE_DIR = cartella del programma (exe). Può non essere scrivibile.
+# DATA_DIR = dati e configurazione dell'utente:
+#   - app installata (frozen): %APPDATA%\PrenotazioniCN
+#   - sviluppo: la cartella del progetto (comportamento di sempre)
+#   - variabile d'ambiente PRENOTAZIONICN_DATA_DIR: vince su tutto
+# All'avvio prepare_data_dir() migra la vecchia config (BASE_DIR\config) copiandola:
+# l'originale non viene mai cancellato.
+# ───────────────────────────────────────────────
 BASE_DIR = get_base_dir()
-CONFIG_DIR = BASE_DIR / "config"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-TEMPLATE_FILE = CONFIG_DIR / "template.txt"
-DEFAULT_TEMPLATE_FILE = CONFIG_DIR / "template_default.txt"
+APP_FOLDER_NAME = "PrenotazioniCN"
 RUNTIME_TEMPLATE: str | None = None
+_DATA_WARNING: str | None = None
+
+
+def default_data_dir() -> Path:
+    override = os.environ.get("PRENOTAZIONICN_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False) and os.environ.get("APPDATA"):
+        return Path(os.environ["APPDATA"]) / APP_FOLDER_NAME
+    return BASE_DIR
+
+
+def use_data_dir(data_dir: Path) -> None:
+    """Imposta tutti i percorsi dei dati a partire da data_dir (unico punto)."""
+    global DATA_DIR, CONFIG_DIR, CONFIG_FILE, TEMPLATE_FILE, DEFAULT_TEMPLATE_FILE
+    DATA_DIR = Path(data_dir)
+    CONFIG_DIR = DATA_DIR / "config"
+    CONFIG_FILE = CONFIG_DIR / "config.json"
+    TEMPLATE_FILE = CONFIG_DIR / "template.txt"
+    DEFAULT_TEMPLATE_FILE = CONFIG_DIR / "template_default.txt"
+
+
+use_data_dir(default_data_dir())
+
+
+def get_data_warning() -> str | None:
+    return _DATA_WARNING
+
+
+def _copy_dir_verified(src: Path, dest: Path) -> list[str]:
+    """Copia src in dest (che non deve esistere) passando da una cartella temporanea; verifica byte per byte."""
+    tmp = dest.with_name(dest.name + ".migrazione_in_corso")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(src, tmp)
+    copiati = []
+    for f in src.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(src)
+            if (tmp / rel).read_bytes() != f.read_bytes():
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise OSError(f"copia non identica: {rel}")
+            copiati.append(str(rel))
+    os.replace(tmp, dest)
+    return copiati
+
+
+def prepare_data_dir(data_dir: Path | None = None, legacy_dir: Path | None = None) -> Path:
+    """
+    Da chiamare all'avvio, prima di leggere la config.
+    Se la cartella dati non ha ancora una config e la vecchia (accanto all'exe) esiste,
+    la copia (verificata) e lascia l'originale dov'è. In caso di problemi usa la vecchia
+    cartella, così l'app funziona come prima, e avvisa.
+    """
+    global _DATA_WARNING
+    data_dir = Path(data_dir) if data_dir else default_data_dir()
+    legacy_cfg = Path(legacy_dir) if legacy_dir else BASE_DIR / "config"
+    target_cfg = data_dir / "config"
+    if data_dir.resolve() == BASE_DIR.resolve() or target_cfg.exists():
+        use_data_dir(data_dir)
+        return data_dir
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if legacy_cfg.is_dir():
+            copiati = _copy_dir_verified(legacy_cfg, target_cfg)
+            nota = (
+                f"Migrazione del {datetime.now():%d/%m/%Y %H:%M}\n"
+                f"Configurazione copiata da: {legacy_cfg}\n"
+                f"File copiati e verificati: {len(copiati)}\n\n"
+                "La vecchia cartella NON è stata cancellata: contiene ancora la vecchia configurazione\n"
+                "(anche la chiave ChatGPT in base64). Quando la nuova versione funziona, si può eliminare.\n"
+            )
+            _atomic_write_text(data_dir / "MIGRAZIONE.txt", nota)
+        else:
+            target_cfg.mkdir(parents=True, exist_ok=True)
+        use_data_dir(data_dir)
+        return data_dir
+    except OSError as e:
+        _DATA_WARNING = (
+            f"Non sono riuscito a preparare la cartella dati «{data_dir}» ({e}). "
+            f"Uso ancora la configurazione in «{legacy_cfg}»: nessun dato è stato perso."
+        )
+        use_data_dir(legacy_cfg.parent)
+        return legacy_cfg.parent
 
 # ───────────────────────────────────────────────
 # SISTEMA LICENZE
@@ -259,9 +349,17 @@ def save_template(text: str) -> None:
     set_runtime_template(None)
 
 
+def default_template_path() -> Path:
+    """template_default.txt: nella cartella dati; se manca, quello installato accanto al programma."""
+    if DEFAULT_TEMPLATE_FILE.exists():
+        return DEFAULT_TEMPLATE_FILE
+    return BASE_DIR / "config" / "template_default.txt"
+
+
 def reset_template_to_default() -> None:
     """Riporta il template a quello di fabbrica (con backup del precedente)."""
-    default_tpl = DEFAULT_TEMPLATE_FILE.read_text(encoding="utf-8") if DEFAULT_TEMPLATE_FILE.exists() else ""
+    path = default_template_path()
+    default_tpl = path.read_text(encoding="utf-8") if path.exists() else ""
     errors = validate_template(default_tpl)
     if errors:
         raise TemplateError("Il template di fabbrica (template_default.txt) non è valido: " + " ".join(errors))
@@ -273,7 +371,7 @@ def reset_template_to_default() -> None:
 def load_template() -> str:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        default_tpl = DEFAULT_TEMPLATE_FILE.read_text(encoding="utf-8")
+        default_tpl = default_template_path().read_text(encoding="utf-8")
     except Exception:
         default_tpl = ""
 
@@ -394,7 +492,7 @@ def load_config() -> dict:
         return {}
 
 
-def update_config(changes: dict) -> dict:
+def update_config(changes: dict, remove: list[str] | tuple = ()) -> dict:
     """
     Aggiorna solo le chiavi indicate, rileggendo il file appena prima di scrivere.
     - file illeggibile (es. bloccato) → ConfigError, nessuna scrittura;
@@ -414,6 +512,8 @@ def update_config(changes: dict) -> dict:
     except OSError as e:
         raise ConfigError(f"Impossibile leggere il file di configurazione ({e}). Salvataggio annullato.") from e
     cfg.update(changes)
+    for k in remove or ():
+        cfg.pop(k, None)
     save_config(cfg)
     return cfg
 
@@ -425,12 +525,110 @@ def save_config(cfg: dict) -> None:
         raise ConfigError(f"Impossibile salvare la configurazione: {e}") from e
 
 
-def load_api_key_new() -> str:
+# ───────────────────────────────────────────────
+# CHIAVE API — cifrata con Windows DPAPI (legata all'utente Windows)
+# Campo nuovo: "api_key_dpapi" (base64 del blob cifrato).
+# Campo vecchio: "api_key_encrypted" (solo base64, NON cifrato): si legge ancora e
+# viene convertito, rimuovendolo solo dopo aver verificato la decifratura.
+# ───────────────────────────────────────────────
+_DPAPI_ENTROPY = b"PrenotazioniCN/api_key/v1"
+
+
+def dpapi_available() -> bool:
+    return sys.platform == "win32"
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    def _blob(b: bytes):
+        buf = ctypes.create_string_buffer(b, len(b))
+        return DATA_BLOB(len(b), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), buf
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    fn.argtypes = [ctypes.POINTER(DATA_BLOB), ctypes.c_void_p if not protect else wintypes.LPCWSTR,
+                   ctypes.POINTER(DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+                   ctypes.POINTER(DATA_BLOB)]
+    fn.restype = wintypes.BOOL
+
+    blob_in, _keep1 = _blob(data)
+    entropy, _keep2 = _blob(_DPAPI_ENTROPY)
+    blob_out = DATA_BLOB()
+    CRYPTPROTECT_UI_FORBIDDEN = 0x1
+    descr = "PrenotazioniCN" if protect else None
+    ok = fn(ctypes.byref(blob_in), descr, ctypes.byref(entropy), None, None,
+            CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out))
+    if not ok:
+        raise OSError(ctypes.get_last_error(), "DPAPI non riuscita")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(ctypes.cast(blob_out.pbData, ctypes.c_void_p))
+
+
+def protect_api_key(key: str) -> str:
+    return base64.b64encode(_dpapi(key.encode("utf-8"), True)).decode("ascii")
+
+
+def unprotect_api_key(value: str) -> str:
+    return _dpapi(base64.b64decode(value.encode("ascii")), False).decode("utf-8")
+
+
+def api_key_config_changes(key: str) -> tuple[dict, list[str]]:
+    """Cosa scrivere in config per salvare la chiave: (da aggiornare, da rimuovere)."""
+    if dpapi_available():
+        cifrata = protect_api_key(key)
+        if unprotect_api_key(cifrata) != key:   # verifica prima di affidarsi
+            raise OSError("verifica della cifratura non riuscita")
+        return {"api_key_dpapi": cifrata}, ["api_key_encrypted"]
+    return {"api_key_encrypted": base64.b64encode(key.encode()).decode()}, ["api_key_dpapi"]
+
+
+def migrate_api_key() -> bool:
+    """Converte la vecchia chiave base64 in DPAPI. True se ha convertito. Mai perdere la chiave."""
+    if not dpapi_available():
+        return False
     cfg = load_config()
+    vecchia_b64 = str(cfg.get("api_key_encrypted") or "").strip()
+    if not vecchia_b64 or str(cfg.get("api_key_dpapi") or "").strip():
+        return False
+    try:
+        vecchia = base64.b64decode(vecchia_b64.encode()).decode()
+    except Exception:
+        return False   # valore illeggibile: lo si lascia com'è
+    if not vecchia.strip():
+        return False
+    try:
+        changes, remove = api_key_config_changes(vecchia)
+        update_config(changes, remove=remove)
+    except (OSError, ConfigError) as e:
+        print(f"Avviso: chiave non convertita in DPAPI, resta il formato vecchio: {e}")
+        return False
+    return True
+
+
+def load_api_key_new() -> str:
+    global _CONFIG_WARNING
+    cfg = load_config()
+    cifrata = str(cfg.get("api_key_dpapi") or "").strip()
+    if cifrata:
+        try:
+            return unprotect_api_key(cifrata)
+        except Exception:
+            _CONFIG_WARNING = ("La chiave ChatGPT salvata non è leggibile con questo utente Windows "
+                               "(è stata salvata su un altro PC o da un altro utente). Reinseriscila dalle Impostazioni.")
+            return ""
     enc = str(cfg.get("api_key_encrypted") or "").strip()
     if not enc:
         return ""
-    import base64
     try:
         return base64.b64decode(enc.encode()).decode()
     except Exception:
@@ -1015,7 +1213,7 @@ def main_superb(date_str: str, giorno_override: str | None = None) -> tuple[list
         enriched.append(rec)
 
     print(f"Superb: {len(enriched)} prenotazioni per {date_str}")
-    html_path = BASE_DIR / "prenotazioni_wa.html"
+    html_path = DATA_DIR / "prenotazioni_wa.html"
     save_html(enriched, html_path)
     return enriched, str(html_path)
 
@@ -1135,7 +1333,7 @@ def main(pdf_path: str, svc_date: date | None = None, giorno_override: str | Non
 
     print("Creati messaggi/link WhatsApp")
 
-    html_path = BASE_DIR / "prenotazioni_wa.html"
+    html_path = DATA_DIR / "prenotazioni_wa.html"
     save_html(enriched, html_path)
     print("Creato HTML")
 
