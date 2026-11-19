@@ -1,0 +1,14 @@
+{
+  "name": "prenotazioni-cn-verifiche",
+  "private": true,
+  "description": "Solo strumenti di verifica (lint, verifica visiva). Non fa parte dell'app.",
+  "scripts": {
+    "lint": "eslint assets tools",
+    "check:syntax": "node tools/check_syntax.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "9.39.1",
+    "globals": "16.5.0"
+  }
+}

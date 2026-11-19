@@ -58,7 +58,7 @@
 </head>
 <body>
 <div class="card">
-    <h1>🔑 Inserisci la tua licenza</h1>
+    <h1>Inserisci la tua licenza</h1>
     <p>Hai ricevuto un codice di attivazione. Inseriscilo qui sotto per sbloccare l'applicazione.</p>
     <input id="tokenInput" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" />
     <button id="btnActivate">Attiva</button>
@@ -70,7 +70,7 @@
     const input = document.getElementById("tokenInput");
     const msg   = document.getElementById("msg");
 
-    btn.addEventListener("click", async () => {
+    btn.onclick = async () => {
       const token = input.value.trim();
       if (!token) {
         msg.className = "err";
@@ -84,15 +84,19 @@
 
       try {
         const result = await window.pywebview.api.insert_license(token);
-        if (result.ok) {
+        if (result && result.ok) {
           msg.className = "ok";
-          msg.textContent = `✅ Licenza attivata! Scade il ${result.expires}. Riavvia l'applicazione.`;
-          btn.textContent = "Riavvia";
+          msg.textContent = `Licenza attivata, valida fino al ${result.expires}. Chiudi questa finestra e riapri PrenotazioniCN.`;
+          btn.textContent = "Chiudi";
           btn.disabled = false;
-          btn.onclick = () => location.reload();
+          input.disabled = true;
+          btn.onclick = async () => {
+            try { await window.pywebview.api.chiudi_finestra(); }
+            catch (e) { msg.textContent = "Chiudi la finestra dalla X in alto a destra e riapri l'app."; }
+          };
         } else {
           msg.className = "err";
-          msg.textContent = "❌ " + (result.error || "Token non valido.");
+          msg.textContent = (result && result.error) || "Codice non valido.";
           btn.disabled = false;
         }
       } catch(e) {
@@ -100,7 +104,7 @@
         msg.textContent = "Errore di comunicazione con il backend.";
         btn.disabled = false;
       }
-    });
+    };
 
     input.addEventListener("keydown", e => {
       if (e.key === "Enter") btn.click();

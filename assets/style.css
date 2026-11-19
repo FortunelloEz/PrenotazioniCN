@@ -339,3 +339,90 @@ tr:hover td { background: #263347; }
     -webkit-text-fill-color: #000000 !important;
     opacity: 1 !important;
 }
+/* ═════════════════════════════════════════════════════════════
+   TOKEN (primo passo verso il design system unico: i componenti
+   nuovi usano solo questi; il resto del file va migrato — vedi CLAUDE.md)
+   ═════════════════════════════════════════════════════════════ */
+:root {
+    --c-bg: #111827;
+    --c-surface: #1f2937;
+    --c-border: #374151;
+    --c-text: #f9fafb;
+    --c-text-2: #d1d5db;
+    --c-text-3: #9ca3af;
+    --c-primary: #2563eb;
+    --c-success-bg: #064e3b; --c-success-fg: #6ee7b7;
+    --c-warning-bg: #78350f; --c-warning-fg: #fcd34d;
+    --c-danger-bg: #7f1d1d;  --c-danger-fg: #fca5a5; --c-danger: #dc2626;
+    --radius-s: 6px; --radius-m: 10px;
+    --shadow-pop: 0 16px 48px rgba(0,0,0,.5);
+    --ease: cubic-bezier(.2,.8,.2,1);
+    --dur: 180ms;
+}
+
+/* ── STATI TABELLA ── */
+.output-empty {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 40px; text-align: center; color: var(--c-text-3); font-size: 13px;
+}
+.output-error { color: var(--c-danger-fg); }
+.spinner {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid var(--c-border); border-top-color: var(--c-primary);
+    animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+.td-missing { border-color: #92400e !important; color: var(--c-warning-fg); }
+.btn-chat:disabled { opacity: .45; cursor: not-allowed; background: transparent; border-style: dashed; color: var(--c-text-3); }
+#date-badge.is-service { color: #bfdbfe; border-color: #1d4ed8; background: #172554; }
+#license-expires-label { font-size: 11px; color: var(--c-text-3); }
+#superbStatus { font-size: 12px; color: var(--c-text-3); margin-left: 8px; }
+#noteModalText { min-height: 120px; }
+
+/* ── CONFERMA ── */
+.confirm-backdrop { animation: fadeIn var(--dur) var(--ease); }
+.confirm-backdrop .modal { animation: popIn var(--dur) var(--ease); }
+.confirm-message { color: var(--c-text-2) !important; line-height: 1.5; }
+.confirm-details {
+    list-style: none; margin: 0 0 12px; padding: 8px 10px; max-height: 200px; overflow: auto;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--radius-s);
+    font-size: 12px; color: var(--c-text-2); line-height: 1.7;
+}
+.btn-modal-danger { background: var(--c-danger); border: 1px solid var(--c-danger); color: #fff; }
+.modal-footer button { min-height: 32px; }
+.modal-footer button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes popIn { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ── TOAST ── */
+#toastHost {
+    position: fixed; right: 16px; bottom: 40px; z-index: 2000;
+    display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px));
+}
+.toast {
+    padding: 10px 14px; border-radius: var(--radius-s); font-size: 12px; line-height: 1.45;
+    background: var(--c-surface); color: var(--c-text); border: 1px solid var(--c-border);
+    border-left-width: 4px; box-shadow: var(--shadow-pop); cursor: pointer;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.toast.show { opacity: 1; transform: none; }
+.toast-success { border-left-color: var(--c-success-fg); }
+.toast-warning { border-left-color: var(--c-warning-fg); }
+.toast-error   { border-left-color: var(--c-danger-fg); }
+.toast-info    { border-left-color: #93c5fd; }
+
+/* ── TABELLA a finestra stretta: niente testi tagliati né pulsanti a capo ── */
+#output td:has(> .td-input) { min-width: 150px; }
+.td-input { min-width: 130px; text-overflow: ellipsis; }
+.td-input::placeholder { color: #92400e; font-style: italic; }
+.btn-chat, .btn-note { white-space: nowrap; }
+/* La colonna WhatsApp (azione principale) resta sempre visibile a destra */
+#output th:last-child, #output td:last-child {
+    position: sticky; right: 0; background: var(--c-surface);
+    box-shadow: -8px 0 12px -8px rgba(0,0,0,.6);
+}
+#output th:last-child { background: var(--c-bg); z-index: 2; }
+#output tr:hover td:last-child { background: #263347; }

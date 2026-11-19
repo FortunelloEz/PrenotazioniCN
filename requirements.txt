@@ -1,4 +1,8 @@
-pymupdf
-pywebview
-pdfplumber
-openai
+# Dipendenze dell'app (verificate con gli import di main.py e logicaBE.py).
+# Versioni FISSATE = quelle della .venv con cui l'app è stata provata (19/11/2026).
+# Per aggiornarle: cambiarle qui, poi test + verifica visiva + build di prova.
+PyMuPDF==1.26.7     # lettura PDF (import pymupdf)
+pywebview==6.1      # finestra dell'app
+openai==2.15.0      # estrazione con LLM
+requests==2.32.5    # licenze e Superb
+tzdata==2025.3      # fusi orari ("Europe/Rome") su Windows: senza, l'app frozen non parte

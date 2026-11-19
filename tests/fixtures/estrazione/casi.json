@@ -1,0 +1,106 @@
+{
+  "_nota": "Dati INVENTATI. I file (txt/csv/pdf/png) vengono generati al volo da tools/qualita_estrazione.py: nessun file di prenotazioni nel repository. 'llm_simulato' è la risposta realistica (con imperfezioni) che dà l'LLM finto; 'atteso' è il risultato giusto scritto a mano.",
+  "casi": [
+    {
+      "id": "txt_lista_ristorante",
+      "formato": "txt",
+      "righe": [
+        "PRENOTAZIONI — SABATO 21 NOVEMBRE 2026",
+        "ROSSI MARIO      20:00   2 pax   333 000 0001   C",
+        "Bianchi Anna     12.30   1 pax   +39 347 000 0002   N",
+        "verdi luca       19:30   4 pax   0039 320 000 0003   C"
+      ],
+      "llm_simulato": {
+        "data_servizio": "2026-11-21",
+        "colonne": ["nome", "orario", "ospiti", "telefono", "stato"],
+        "prenotazioni": [
+          {"nome": "ROSSI MARIO", "orario": "20:00", "ospiti": "2", "telefono": "333 000 0001", "stato": "C"},
+          {"nome": "Bianchi Anna", "orario": "12.30", "ospiti": 1, "telefono": "+39 347 000 0002", "stato": "N"},
+          {"nome": "verdi luca", "orario": "19:30", "ospiti": 4, "telefono": "0039 320 000 0003", "stato": "C"}
+        ]
+      },
+      "atteso": {
+        "data_servizio": "2026-11-21",
+        "prenotazioni": [
+          {"nome": "Rossi Mario", "telefono": "+393330000001", "orario": "20:00", "ospiti": "2", "pasto": "cena"},
+          {"nome": "Bianchi Anna", "telefono": "+393470000002", "orario": "12.30", "ospiti": "1", "pasto": "pranzo"},
+          {"nome": "Verdi Luca", "telefono": "+393200000003", "orario": "19:30", "ospiti": "4", "pasto": "cena"}
+        ]
+      }
+    },
+    {
+      "id": "csv_export_inglese",
+      "formato": "csv",
+      "righe": [
+        "Name,Phone,Time,Guests,Experience,Status",
+        "Neri Giulia,3200000004,18:00,3,Aperitif,C",
+        "Gallo Paolo,+33 6 00 00 00 05,13:00,2,Lunch,C"
+      ],
+      "llm_simulato": {
+        "data_servizio": null,
+        "colonne": ["nome", "telefono", "orario", "ospiti", "pasto", "stato"],
+        "prenotazioni": [
+          {"nome": "Neri Giulia", "telefono": "3200000004", "orario": "18:00", "ospiti": 3, "pasto": "Aperitif", "stato": "C"},
+          {"nome": "Gallo Paolo", "telefono": "+33 6 00 00 00 05", "orario": "13:00", "ospiti": 2, "pasto": "Lunch", "stato": "C"}
+        ]
+      },
+      "atteso": {
+        "data_servizio": null,
+        "prenotazioni": [
+          {"nome": "Neri Giulia", "telefono": "+393200000004", "orario": "18:00", "ospiti": "3", "pasto": "aperitivo"},
+          {"nome": "Gallo Paolo", "telefono": "+33600000005", "orario": "13:00", "ospiti": "2", "pasto": "pranzo"}
+        ]
+      }
+    },
+    {
+      "id": "pdf_gestionale",
+      "formato": "pdf",
+      "righe": [
+        "Cascina (prova) - Prenotazioni del 22/11/2026",
+        "Ora   Cliente          Pax  Telefono",
+        "12:00 Fontana Elisa    5    02 0000006",
+        "20:30 Costa Marco      2    347-000-0007"
+      ],
+      "llm_simulato": {
+        "data_servizio": "2026-11-22",
+        "colonne": ["orario", "nome", "ospiti", "telefono"],
+        "prenotazioni": [
+          {"orario": "12:00", "nome": "Fontana Elisa", "ospiti": 5, "telefono": "02 0000006"},
+          {"orario": "20:30", "nome": "Costa Marco", "ospiti": 2, "telefono": "347-000-0007"}
+        ]
+      },
+      "atteso": {
+        "data_servizio": "2026-11-22",
+        "prenotazioni": [
+          {"nome": "Fontana Elisa", "telefono": "+39020000006", "orario": "12:00", "ospiti": "5", "pasto": "pranzo"},
+          {"nome": "Costa Marco", "telefono": "+393470000007", "orario": "20:30", "ospiti": "2", "pasto": "cena"}
+        ]
+      }
+    },
+    {
+      "id": "png_foto_agenda",
+      "formato": "png",
+      "righe": [
+        "Domenica 23/11/2026",
+        "Ricci Sara  19:00  6  3330000008",
+        "Moro Ugo    7:30 PM  2  3330000009"
+      ],
+      "llm_testo_immagine": "Domenica 23/11/2026\nRicci Sara 19:00 6 3330000008\nMoro Ugo 7:30 PM 2 3330000009",
+      "llm_simulato": {
+        "data_servizio": "2026-11-23",
+        "colonne": ["nome", "orario", "ospiti", "telefono"],
+        "prenotazioni": [
+          {"nome": "Ricci Sara", "orario": "19:00", "ospiti": 6, "telefono": "3330000008"},
+          {"nome": "Moro Ugo", "orario": "7:30 PM", "ospiti": 2, "telefono": "3330000009"}
+        ]
+      },
+      "atteso": {
+        "data_servizio": "2026-11-23",
+        "prenotazioni": [
+          {"nome": "Ricci Sara", "telefono": "+393330000008", "orario": "19:00", "ospiti": "6", "pasto": "cena"},
+          {"nome": "Moro Ugo", "telefono": "+393330000009", "orario": "7:30 PM", "ospiti": "2", "pasto": "cena"}
+        ]
+      }
+    }
+  ]
+}

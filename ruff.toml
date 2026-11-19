@@ -1,0 +1,11 @@
+line-length = 130
+extend-exclude = ["bkp", "Nuova cartella", "build", "dist", "Output", ".venv", "node_modules"]
+
+[lint]
+select = ["E", "F", "W", "B"]
+# E701/E702: stile compatto già presente in infer_pasto; B008 non pertinente
+ignore = ["E701", "E702", "E402"]
+
+[lint.per-file-ignores]
+# testo del prompt LLM: riformattarlo cambierebbe ciò che riceve il modello
+"definizioni_llm.py" = ["E501"]

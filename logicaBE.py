@@ -4,16 +4,34 @@ import os
 import sys
 import re
 import json
+import shutil
+import string
 import tempfile
 from pathlib import Path
 import base64
 import csv
 import io
-import fitz
+import pymupdf as fitz  # "import fitz" è deprecato da PyMuPDF 2.x
 from urllib.parse import quote
 from datetime import date
 from openai import OpenAI
 from definizioni_llm import SYSTEM_GLOBAL, USER_TMPL_GLOBAL
+
+
+class ConfigError(RuntimeError):
+    """La configurazione non si può leggere o scrivere senza rischiare di perderla."""
+
+
+class TemplateError(ValueError):
+    """Il template del messaggio non è valido: nessun messaggio deve partire."""
+
+
+class LLMError(RuntimeError):
+    """L'AI non ha restituito un risultato utilizzabile (non va confuso con «0 prenotazioni»)."""
+
+
+class SuperbError(RuntimeError):
+    """Errore nello scarico da Superb, con messaggio già comprensibile per l'utente."""
 
 def reset_client() -> None:
     global client
@@ -38,7 +56,7 @@ RUNTIME_TEMPLATE: str | None = None
 # SISTEMA LICENZE
 # ───────────────────────────────────────────────
 import hashlib
-from datetime import date, datetime
+from datetime import datetime
 import requests as _requests
 
 LICENSE_SERVER_URL = ""
@@ -50,7 +68,7 @@ def validate_license_online(token: str) -> dict:
     """
     Chiama il server e ritorna dict con:
       { "valid": bool, "expires": "YYYY-MM-DD" oppure None }
-    In caso di errore di rete ritorna { "valid": False, "error": "..." }
+    In caso di errore di rete o risposta malformata ritorna { "valid": False, "error": "..." }
     """
     try:
         r = _requests.post(
@@ -59,9 +77,14 @@ def validate_license_online(token: str) -> dict:
             timeout=6
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
     except Exception as e:
         return {"valid": False, "error": str(e)}
+    if not isinstance(data, dict):
+        return {"valid": False, "error": "Risposta del server licenze non valida."}
+    # Solo un vero booleano true conta come valido (una stringa "false" non deve sbloccare).
+    data["valid"] = data.get("valid") is True
+    return data
 
 def check_license() -> tuple[bool, str]:
     """
@@ -69,9 +92,9 @@ def check_license() -> tuple[bool, str]:
     Ritorna (True, "") se valida, (False, messaggio_errore) se non valida.
     """
     cfg = load_config()
-    token = cfg.get("license_token", "").strip()
-    cached_expires = cfg.get("license_expires", "")
-    last_check_str = cfg.get("license_last_check", "")
+    token = str(cfg.get("license_token") or "").strip()
+    cached_expires = str(cfg.get("license_expires") or "")
+    last_check_str = str(cfg.get("license_last_check") or "")
 
     if not token:
         return False, "Nessuna licenza inserita."
@@ -116,10 +139,11 @@ def check_license() -> tuple[bool, str]:
     except Exception:
         return False, "Data scadenza non valida ricevuta dal server."
 
-    # Salva in cache
-    cfg["license_expires"] = expires
-    cfg["license_last_check"] = today_str
-    save_config(cfg)
+    # Salva in cache (se non si riesce a scrivere, la licenza resta comunque valida per oggi)
+    try:
+        update_config({"license_expires": expires, "license_last_check": today_str})
+    except ConfigError as e:
+        print(f"Avviso: cache licenza non salvata: {e}")
 
     return True, ""
 
@@ -145,22 +169,106 @@ def save_license_token(token: str) -> tuple[bool, str]:
     except Exception:
         return False, "Data scadenza non valida."
 
-    cfg = load_config()
-    cfg["license_token"] = token
-    cfg["license_expires"] = expires
-    cfg["license_last_check"] = date.today().isoformat()
-    save_config(cfg)
+    try:
+        update_config({
+            "license_token": token,
+            "license_expires": expires,
+            "license_last_check": date.today().isoformat(),
+        })
+    except ConfigError as e:
+        return False, str(e)
 
     return True, expires
 # ───────────────────────────────────────────────
 # FINE SISTEMA LICENZE
 # ───────────────────────────────────────────────
 
-def set_runtime_template(text: str | None) -> None:
+# Variabili ammesse nel template del messaggio (unico elenco: UI, validazione e build_message).
+TEMPLATE_FIELDS = ("nome", "giorno", "pasto", "ospiti", "persone", "orario")
 
+# Quanti backup del template conservare (i più vecchi vengono eliminati).
+MAX_TEMPLATE_BACKUPS = 20
+
+
+def validate_template(text: str | None) -> list[str]:
+    """Ritorna l'elenco degli errori del template (vuoto = valido)."""
+    if not (text or "").strip():
+        return ["Il template è vuoto."]
+    disponibili = ", ".join("{" + f + "}" for f in TEMPLATE_FIELDS)
+    try:
+        parsed = list(string.Formatter().parse(text))
+    except ValueError:
+        return ["Parentesi graffe non bilanciate. Le variabili si scrivono così: {nome}. "
+                "Per scrivere una graffa nel testo usa {{ oppure }}."]
+    errors: list[str] = []
+    for _literal, field, spec, conv in parsed:
+        if field is None:
+            continue
+        if field == "":
+            errors.append("C'è una coppia di graffe vuota {}. Variabili disponibili: " + disponibili + ".")
+        elif field not in TEMPLATE_FIELDS:
+            errors.append(f"Variabile sconosciuta {{{field}}}. Variabili disponibili: {disponibili}.")
+        elif spec or conv:
+            errors.append(f"La variabile {{{field}}} non accetta formati: scrivi solo {{{field}}}.")
+    # niente doppioni nello stesso messaggio di errore
+    return list(dict.fromkeys(errors))
+
+
+def set_runtime_template(text: str | None) -> None:
+    """Template solo di sessione. Va validato prima (validate_template)."""
     global RUNTIME_TEMPLATE
     text = (text or "").strip()
     RUNTIME_TEMPLATE = text or None
+
+
+def _prune_template_backups(keep: int | None = None) -> None:
+    keep = MAX_TEMPLATE_BACKUPS if keep is None else keep
+    backups = sorted(
+        list(CONFIG_DIR.glob("template_*.bak.txt")) + list(CONFIG_DIR.glob("template_backup_*.txt")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in backups[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def backup_template(kind: str = "bak") -> Path | None:
+    """Copia template.txt in un backup datato (il file originale resta al suo posto)."""
+    if not TEMPLATE_FILE.exists():
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    name = f"template_backup_{ts}.txt" if kind == "reset" else f"template_{ts}.bak.txt"
+    dest = TEMPLATE_FILE.with_name(name)
+    shutil.copy2(TEMPLATE_FILE, dest)
+    _prune_template_backups()
+    return dest
+
+
+def save_template(text: str) -> None:
+    """Salva il template predefinito: valida, fa il backup, scrive in modo atomico."""
+    errors = validate_template(text)
+    if errors:
+        raise TemplateError(" ".join(errors))
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    backup_template("bak")
+    _atomic_write_text(TEMPLATE_FILE, text.strip())
+    # Il template di sessione non deve "coprire" quello appena salvato.
+    set_runtime_template(None)
+
+
+def reset_template_to_default() -> None:
+    """Riporta il template a quello di fabbrica (con backup del precedente)."""
+    default_tpl = DEFAULT_TEMPLATE_FILE.read_text(encoding="utf-8") if DEFAULT_TEMPLATE_FILE.exists() else ""
+    errors = validate_template(default_tpl)
+    if errors:
+        raise TemplateError("Il template di fabbrica (template_default.txt) non è valido: " + " ".join(errors))
+    backup_template("reset")
+    _atomic_write_text(TEMPLATE_FILE, default_tpl)
+    set_runtime_template(None)
+
 
 def load_template() -> str:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,7 +287,7 @@ def load_template() -> str:
 
     # Se non esiste → lo creiamo con default
     try:
-        TEMPLATE_FILE.write_text(default_tpl, encoding="utf-8")
+        _atomic_write_text(TEMPLATE_FILE, default_tpl)
     except Exception:
         # se non riusciamo a scrivere comunque ritorniamo default
         return default_tpl
@@ -196,25 +304,130 @@ def load_api_key() -> str:
 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-2024-08-06")
+# Modello per leggere le immagini (prima scritto fisso dentro _load_image_via_llm).
+MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+
+
+# ───────────────────────────────────────────────
+# CONFIGURAZIONE (chiave API, licenza, sessione Superb)
+# Regole: scrittura atomica (file temporaneo + rinomina); un file illeggibile
+# non viene mai sovrascritto senza averne prima conservato una copia, e
+# l'utente viene avvisato (get_config_warning).
+# ───────────────────────────────────────────────
+_CONFIG_WARNING: str | None = None
+
+
+class _ConfigCorrupt(Exception):
+    pass
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_config_strict() -> dict:
+    """Legge config.json. Solleva OSError se non leggibile, _ConfigCorrupt se danneggiato."""
+    if not CONFIG_FILE.exists():
+        return {}
+    raw = CONFIG_FILE.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise _ConfigCorrupt(str(e)) from e
+    if not isinstance(data, dict):
+        raise _ConfigCorrupt("il contenuto non è un oggetto JSON")
+    return data
+
+
+def _preserve_corrupt_config() -> Path:
+    """Conserva una copia del config danneggiato (una sola copia per contenuto uguale)."""
+    global _CONFIG_WARNING
+    content = CONFIG_FILE.read_bytes()
+    for existing in CONFIG_DIR.glob("config.danneggiato_*.json"):
+        try:
+            if existing.read_bytes() == content:
+                dest = existing
+                break
+        except OSError:
+            continue
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        dest = CONFIG_DIR / f"config.danneggiato_{ts}.json"
+        shutil.copy2(CONFIG_FILE, dest)
+    _CONFIG_WARNING = (
+        "Il file di configurazione era danneggiato. Ne ho conservato una copia in "
+        f"«{dest}». Chiave ChatGPT, licenza o sessione Superb potrebbero andare reinserite."
+    )
+    return dest
+
+
+def get_config_warning() -> str | None:
+    return _CONFIG_WARNING
 
 
 def load_config() -> dict:
-    if not CONFIG_FILE.exists():
-        return {}
+    """Lettura tollerante (per mostrare/usare i valori): mai un'eccezione, ma avvisa."""
+    global _CONFIG_WARNING
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
+        return _read_config_strict()
+    except _ConfigCorrupt:
+        try:
+            _preserve_corrupt_config()
+        except OSError as e:
+            _CONFIG_WARNING = f"Il file di configurazione è danneggiato e non riesco a copiarlo: {e}"
+        return {}
+    except OSError as e:
+        _CONFIG_WARNING = f"Impossibile leggere il file di configurazione: {e}"
         return {}
 
+
+def update_config(changes: dict) -> dict:
+    """
+    Aggiorna solo le chiavi indicate, rileggendo il file appena prima di scrivere.
+    - file illeggibile (es. bloccato) → ConfigError, nessuna scrittura;
+    - file danneggiato → prima se ne conserva una copia, poi si riparte da {}.
+    """
+    try:
+        cfg = _read_config_strict()
+    except _ConfigCorrupt:
+        try:
+            _preserve_corrupt_config()
+        except OSError as e:
+            raise ConfigError(
+                f"Il file di configurazione è danneggiato e non riesco a farne una copia: {e}. "
+                "Salvataggio annullato per non perdere dati."
+            ) from e
+        cfg = {}
+    except OSError as e:
+        raise ConfigError(f"Impossibile leggere il file di configurazione ({e}). Salvataggio annullato.") from e
+    cfg.update(changes)
+    save_config(cfg)
+    return cfg
+
+
 def save_config(cfg: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False),
-                           encoding="utf-8")
+    try:
+        _atomic_write_text(CONFIG_FILE, json.dumps(cfg, indent=2, ensure_ascii=False))
+    except OSError as e:
+        raise ConfigError(f"Impossibile salvare la configurazione: {e}") from e
 
 
 def load_api_key_new() -> str:
     cfg = load_config()
-    enc = cfg.get("api_key_encrypted", "").strip()
+    enc = str(cfg.get("api_key_encrypted") or "").strip()
     if not enc:
         return ""
     import base64
@@ -256,12 +469,34 @@ def get_client() -> OpenAI:
 # -------------------------------------------------------------------
 # Utils
 # -------------------------------------------------------------------
-def normalize_phone(s: str) -> str:
+# Prefisso usato per i numeri italiani scritti senza prefisso internazionale.
+DEFAULT_COUNTRY_CODE = "39"
+
+
+def normalize_phone(s) -> str:
+    """
+    Ritorna il numero in formato +<prefisso><numero>, oppure "".
+    - "+…" o "00…"            → già internazionale, si tiene il prefisso scritto;
+    - 10 cifre che iniziano con 3 → cellulare italiano senza prefisso → +39;
+    - inizia con un solo 0     → fisso italiano (nessun prefisso estero inizia per 0) → +39;
+    - altrimenti               → "+" + cifre (caso ambiguo, invariato rispetto a prima).
+    """
+    if s is None:
+        return ""
+    s = str(s).strip()
     if not s:
         return ""
     digits = re.sub(r"\D", "", s)
     if not digits:
         return ""
+    if s.lstrip("( ").startswith("+"):
+        return "+" + digits
+    if digits.startswith("00"):
+        return "+" + digits[2:]
+    if len(digits) == 10 and digits.startswith("3"):
+        return "+" + DEFAULT_COUNTRY_CODE + digits
+    if digits.startswith("0"):
+        return "+" + DEFAULT_COUNTRY_CODE + digits
     return "+" + digits
 
 
@@ -302,9 +537,19 @@ def load_file_text(file_path: Path) -> str:
     ext = file_path.suffix.lower()
 
     if ext == ".pdf":
-        return load_pdf_text(file_path)
+        text = load_pdf_text(file_path)
+        # load_pdf_text aggiunge le intestazioni "===== PAGINA n =====": se resta solo quello, il PDF è una scansione
+        if not re.sub(r"=+ PAGINA \d+ =+", "", text).strip():
+            raise ValueError(
+                "Il PDF non contiene testo selezionabile (probabilmente è una scansione). "
+                "Salva la pagina come immagine PNG o JPG e carica l'immagine."
+            )
+        return text
 
-    elif ext in (".jpg", ".jpeg", ".png", ".tiff", ".webp"):
+    elif ext in (".tif", ".tiff"):
+        raise ValueError("Le immagini TIFF non sono lette dall'AI: salvala come PNG o JPG e riprova.")
+
+    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
         return _load_image_via_llm(file_path)
 
     elif ext == ".csv":
@@ -334,7 +579,7 @@ def _load_image_via_llm(image_path: Path) -> str:
 
     c = get_client()
     resp = c.chat.completions.create(
-        model="gpt-4o",
+        model=MODEL_VISION,
         messages=[{
             "role": "user",
             "content": [
@@ -355,7 +600,16 @@ def _load_image_via_llm(image_path: Path) -> str:
         }],
         max_tokens=4000,
     )
-    return resp.choices[0].message.content or ""
+    choice = resp.choices[0]
+    if getattr(choice, "finish_reason", None) == "length":
+        raise LLMError(
+            "L'immagine contiene più testo di quanto l'AI riesca a leggere in una volta: "
+            "ritagliala in due parti e caricale separatamente."
+        )
+    text = choice.message.content or ""
+    if not text.strip():
+        raise LLMError("L'AI non ha letto alcun testo nell'immagine. Controlla che sia nitida e riprova.")
+    return text
 
 
 
@@ -374,22 +628,68 @@ def call_llm_global(raw_text: str) -> dict:
         max_tokens=8000,
     )
 
-    raw = resp.choices[0].message.content or "{}"
+    choice = resp.choices[0]
+    if getattr(choice, "finish_reason", None) == "length":
+        raise LLMError(
+            "La risposta dell'AI è stata troncata: il file contiene troppe prenotazioni per una sola "
+            "elaborazione. Dividilo in due parti e caricale separatamente. Nessuna prenotazione è stata caricata."
+        )
+    raw = choice.message.content or ""
+    if not raw.strip():
+        raise LLMError("L'AI ha restituito una risposta vuota. Riprova; se succede ancora, controlla il file.")
 
     try:
-        return json.loads(raw)
-    except Exception:
-        return {
-            "data_servizio": None,
-            "colonne": [],
-            "prenotazioni": []
-        }
+        obj = json.loads(raw)
+    except ValueError as e:
+        raise LLMError(
+            "L'AI ha restituito una risposta non leggibile (JSON non valido). Riprova l'elaborazione."
+        ) from e
+
+    if not isinstance(obj, dict):
+        raise LLMError("L'AI ha restituito una risposta con una struttura inattesa. Riprova l'elaborazione.")
+    pren = obj.get("prenotazioni")
+    if pren is None:
+        obj["prenotazioni"] = []
+    elif not isinstance(pren, list) or not all(isinstance(p, dict) for p in pren):
+        raise LLMError("L'AI ha restituito le prenotazioni in un formato inatteso. Riprova l'elaborazione.")
+    colonne = obj.get("colonne")
+    if not isinstance(colonne, list):
+        obj["colonne"] = []
+    else:
+        obj["colonne"] = [str(c) for c in colonne if isinstance(c, (str, int, float)) and str(c).strip()]
+    return obj
 
 def nome_breve(nome: str) -> str:
     if not nome:
         return ""
     first = nome.strip().split()[0]
     return re.sub(r"[^\wÀ-ÖØ-öø-ÿ'-]", "", first)
+
+
+# Fasce orarie per riconoscere il pasto quando il file non lo dice (ore intere, estremi inclusi).
+# Unico punto in cui sono definite. Fuori fascia (es. 10:xx o 00–10) → pasto non riconosciuto.
+MEAL_HOUR_RANGES = (
+    ("pranzo", 11, 15),
+    ("aperitivo", 16, 18),
+    ("cena", 19, 23),
+)
+
+
+def parse_hour(orario) -> int | None:
+    """Ricava l'ora (0–23) da '19:30', '19.30', '19h30', '19', '7:30 PM'. None se non si capisce."""
+    if orario is None:
+        return None
+    s = str(orario).strip().lower()
+    m = re.match(r"^(\d{1,2})(?:\s*[:.h]\s*(\d{2}))?\s*(am|pm)?\b", s)
+    if not m:
+        return None
+    h = int(m.group(1))
+    ampm = m.group(3)
+    if ampm == "pm" and h < 12:
+        h += 12
+    elif ampm == "am" and h == 12:
+        h = 0
+    return h if 0 <= h <= 23 else None
 
 
 def infer_pasto(orario, pasto):
@@ -399,14 +699,11 @@ def infer_pasto(orario, pasto):
     if p in ("cena", "dinner"):     return "cena"
 
     # fallback sull'orario
-    if orario:
-        try:
-            h = int(str(orario).split(":")[0])
-            if 11 <= h <= 15: return "pranzo"
-            if 16 <= h <= 18: return "aperitivo"
-            if h >= 19:       return "cena"
-        except Exception:
-            pass
+    h = parse_hour(orario)
+    if h is not None:
+        for nome, start, end in MEAL_HOUR_RANGES:
+            if start <= h <= end:
+                return nome
     return None
 
 def format_data_label(svc: date | None) -> str | None:
@@ -460,16 +757,17 @@ def format_giorno_for_sentence(giorno: str, pasto_text: str) -> str:
     if g_lower == "oggi":
         return "di questa sera" if pasto_text == "cena" else "di oggi"
 
+    # Il menu «Giorno» invia i nomi senza accento: nel messaggio al cliente vanno scritti giusti.
     giorni_maschili = {
-        "lunedi", "lunedì",
-        "martedi", "martedì",
-        "mercoledi", "mercoledì",
-        "giovedi", "giovedì",
-        "venerdi", "venerdì",
-        "sabato"
+        "lunedi": "lunedì", "lunedì": "lunedì",
+        "martedi": "martedì", "martedì": "martedì",
+        "mercoledi": "mercoledì", "mercoledì": "mercoledì",
+        "giovedi": "giovedì", "giovedì": "giovedì",
+        "venerdi": "venerdì", "venerdì": "venerdì",
+        "sabato": "sabato",
     }
     if g_lower in giorni_maschili:
-        return f"di questo {g_lower}"
+        return f"di questo {giorni_maschili[g_lower]}"
 
     if g_lower == "domenica":
         return "di questa domenica"
@@ -477,19 +775,49 @@ def format_giorno_for_sentence(giorno: str, pasto_text: str) -> str:
     return f"a {g}"
 
 
+def get_active_template() -> str:
+    """Template in uso: quello di sessione se impostato, altrimenti template.txt."""
+    if RUNTIME_TEMPLATE is not None:
+        return RUNTIME_TEMPLATE
+    return load_template()
+
+
+def campi_mancanti(pasto, ospiti, orario) -> list[str]:
+    """
+    Dati che mancano TRA QUELLI USATI dal template attivo: sono quelli che nel
+    messaggio al cliente diventerebbero «?». Il frontend li usa per escludere la
+    riga dall'invio in blocco e chiedere conferma sulla chat singola.
+    """
+    try:
+        usati = {f for _l, f, _s, _c in string.Formatter().parse(get_active_template()) if f}
+    except ValueError:
+        return []
+    out = []
+    if "pasto" in usati and not pasto:
+        out.append("pasto")
+    if "ospiti" in usati and (ospiti is None or str(ospiti).strip() == ""):
+        out.append("ospiti")
+    if "orario" in usati and not orario:
+        out.append("orario")
+    return out
+
+
 def build_message(nome: str, giorno: str, pasto: str, ospiti: int | None, orario: str | None) -> str:
     nome = nome_breve(nome) or ""
-    ppl = str(ospiti) if ospiti is not None else "?"
+    # 0 è un valore vero (non "mancante"); None o stringa vuota → "?"
+    ppl = "?" if ospiti is None or str(ospiti).strip() == "" else str(ospiti).strip()
     hhmm = orario or "?"
     pasto_text = pasto or "?"
     giorno = format_giorno_for_sentence(giorno, pasto_text)
     persone = "persona" if ppl == "1" else "persone"
 
-    global RUNTIME_TEMPLATE
-    if RUNTIME_TEMPLATE is not None:
-        template = RUNTIME_TEMPLATE
-    else:
-        template = load_template()
+    template = get_active_template()
+    errors = validate_template(template)
+    if errors:
+        raise TemplateError(
+            "Il template del messaggio non è valido, nessun messaggio è stato preparato. "
+            + " ".join(errors) + " Correggilo da Impostazioni → Cambia template predefinito."
+        )
 
     msg = template.format(
         nome=nome,
@@ -509,20 +837,24 @@ def recompute_records(records: list) -> list:
         nome = r.get("nome", "")
         telefono = r.get("telefono", "")
         orario = r.get("orario", "")
-        ospiti = r.get("ospiti", "")
+        ospiti = r.get("ospiti")
         giorno = r.get("giorno", "")
 
-        pasto = infer_pasto(orario, r.get("pasto", ""))
+        # «Esperienza personalizzata» (scelta dall'utente) vince sul riconoscimento automatico.
+        personalizzato = str(r.get("pasto_personalizzato") or "").strip()
+        pasto = personalizzato or infer_pasto(orario, r.get("pasto", ""))
 
         msg = build_message(nome, giorno, pasto, ospiti, orario)
-        wa_number = clean_phone_to_wa(telefono)
+        wa_number = clean_phone_to_wa(normalize_phone(telefono))
         wa_link = f"https://wa.me/{wa_number}?text={quote(msg, safe='')}" if wa_number else "#"
 
         r_out = dict(r)
         r_out["pasto"] = pasto
+        r_out["telefono"] = normalize_phone(telefono)
         r_out["messaggio"] = msg
         r_out["link_whatsapp"] = wa_link
         r_out["telefono_wa"] = wa_number
+        r_out["_mancanti"] = campi_mancanti(pasto, ospiti, orario)
         out.append(r_out)
     return out
 
@@ -547,8 +879,8 @@ _SUPERB_HEADERS_BASE = {
 
 def fetch_superb(date_str: str) -> list[dict]:
     cfg = load_config()
-    session = cfg.get("superb_session", "").strip()
-    restaurant_id = cfg.get("superb_restaurant_id", "").strip()
+    session = str(cfg.get("superb_session") or "").strip()
+    restaurant_id = str(cfg.get("superb_restaurant_id") or "").strip()
 
     if not session:
         raise RuntimeError("Sessione Superb non configurata. Inserirla dalle Impostazioni.")
@@ -570,23 +902,37 @@ def fetch_superb(date_str: str) -> list[dict]:
     headers = dict(_SUPERB_HEADERS_BASE)
     headers["restaurant"] = restaurant_id
 
-    r = _requests.get(
-        f"{_SUPERB_API}/booking/dashboard",
-        params={"sort": "arrival", "q": q},
-        headers=headers,
-        cookies={"koa:sess": session},
-        timeout=10,
-    )
+    try:
+        r = _requests.get(
+            f"{_SUPERB_API}/booking/dashboard",
+            params={"sort": "arrival", "q": q},
+            headers=headers,
+            cookies={"koa:sess": session},
+            timeout=10,
+        )
+    except _requests.Timeout as e:
+        raise SuperbError("Superb non ha risposto in tempo. Controlla la connessione e riprova.") from e
+    except _requests.RequestException as e:
+        raise SuperbError("Impossibile contattare Superb. Controlla la connessione a internet e riprova.") from e
 
-    if r.status_code == 401:
-        raise RuntimeError("Sessione Superb scaduta. Rinnovarla dalle Impostazioni → Configura Superb.")
-    r.raise_for_status()
+    if r.status_code in (401, 403):
+        raise SuperbError("Sessione Superb scaduta. Rinnovarla dalle Impostazioni → Configura Superb.")
+    if r.status_code >= 400:
+        raise SuperbError(f"Superb ha risposto con un errore (codice {r.status_code}). Riprova più tardi.")
 
-    data = r.json()
-    if not data.get("success"):
-        raise RuntimeError(f"Superb ha risposto con errore: {data}")
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise SuperbError("Superb ha restituito una risposta non leggibile. Riprova più tardi.") from e
+    if not isinstance(data, dict) or not data.get("success"):
+        # Non si mostra il contenuto della risposta: può contenere dati dei clienti.
+        dettaglio = data.get("message") if isinstance(data, dict) else None
+        raise SuperbError("Superb ha risposto con errore" + (f": {dettaglio}" if dettaglio else "."))
 
-    return data.get("data", [])
+    items = data.get("data", [])
+    if not isinstance(items, list):
+        raise SuperbError("Superb ha restituito le prenotazioni in un formato inatteso.")
+    return [x for x in items if isinstance(x, dict)]
 
 
 def _arrival_to_orario(arrival: str) -> str:
@@ -662,6 +1008,7 @@ def main_superb(date_str: str, giorno_override: str | None = None) -> tuple[list
         rec["messaggio"]           = msg
         rec["link_whatsapp"]       = wa_link
         rec["telefono_wa"]         = wa_number
+        rec["_mancanti"]           = campi_mancanti(pasto, rec.get("ospiti"), rec.get("orario"))
         rec["giorno"]              = giorno
         rec["data_servizio_label"] = format_data_label(svc_date) or ""
         rec["_colonne"]            = colonne
@@ -678,6 +1025,8 @@ def main_superb(date_str: str, giorno_override: str | None = None) -> tuple[list
 
 def estrai(pdf_path: Path):
     raw_text = load_file_text(Path(pdf_path))
+    if not (raw_text or "").strip():
+        raise ValueError("Il file è vuoto: non ci sono prenotazioni da leggere.")
 
     obj = call_llm_global(raw_text)
 
@@ -739,7 +1088,9 @@ a{{text-decoration:none}}
         link = html.escape(str(r.get("link_whatsapp", "")))
         rows.append(
             f"<tr><td>{nome}</td><td>{tel}</td><td>{orario}</td><td>{ospiti}</td>"
-            f"<td>{pasto}</td><td>{stato}</td><td>{giorno}</td><td>{note}</td><td><a target='_blank' href='{link}'>Apri chat</a></td></tr>"        )
+            f"<td>{pasto}</td><td>{stato}</td><td>{giorno}</td><td>{note}</td>"
+            f"<td><a target='_blank' href='{link}'>Apri chat</a></td></tr>"
+        )
     tail = "</tbody></table></body></html>"
     path_html.write_text(head + "\n".join(rows) + tail, encoding="utf-8")
 
@@ -775,8 +1126,10 @@ def main(pdf_path: str, svc_date: date | None = None, giorno_override: str | Non
         r_out["messaggio"] = msg
         r_out["link_whatsapp"] = wa_link
         r_out["telefono_wa"] = wa_number
+        r_out["_mancanti"] = campi_mancanti(pasto, ospiti, orario)
         r_out["giorno"] = giorno
-        r_out["data_servizio_label"] = f"{svc_date.day} {svc_date.strftime('%B %Y')}" if svc_date else ""
+        # Stessa etichetta italiana usata per Superb (strftime('%B') dipende dalla lingua di Windows).
+        r_out["data_servizio_label"] = format_data_label(svc_date) or ""
         r_out["_colonne"] = colonne
         enriched.append(r_out)
 
@@ -784,6 +1137,6 @@ def main(pdf_path: str, svc_date: date | None = None, giorno_override: str | Non
 
     html_path = BASE_DIR / "prenotazioni_wa.html"
     save_html(enriched, html_path)
-    print(f"Creato HTML")
+    print("Creato HTML")
 
     return enriched, str(html_path)

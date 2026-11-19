@@ -10,11 +10,11 @@
 <!-- TITLEBAR -->
 <div id="titlebar">
     <div id="titlebar-left">
-        <div id="app-icon">⬛</div>
+        <div id="app-icon" aria-hidden="true">CN</div>
         <span id="app-name">Cascina Nascosta — Prenotazioni</span>
         <span id="license-badge">Beta</span>
     </div>
-    <div id="license-expires-label" style="font-size:11px; color:#9ca3af;"></div>
+    <div id="license-expires-label"></div>
 </div>
 
 <!-- TOPBAR -->
@@ -125,13 +125,13 @@
                 <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 Scarica prenotazioni
             </button>
-            <span id="superbStatus" style="font-size:12px;color:#6b7280;margin-left:8px;"></span>
+            <span id="superbStatus"></span>
         </div>
 
         <!-- TEMPLATE BOX -->
         <div id="templateBox" style="display:none;">
             <h2>Template messaggio WhatsApp</h2>
-            <p>Variabili disponibili: <code>{nome}</code>, <code>{giorno}</code>, <code>{pasto}</code>, <code>{ospiti}</code>, <code>{orario}</code></p>
+            <p>Variabili disponibili: <code id="templateVarsHelp">{nome}, {giorno}, {pasto}, {ospiti}, {persone}, {orario}</code>. «Applica template» vale solo fino alla chiusura dell'app; per salvarlo usa Impostazioni → Cambia template predefinito.</p>
             <textarea id="templateInput"></textarea>
             <button id="btnApplyTemplate">Applica template</button>
         </div>
@@ -157,7 +157,7 @@
 
         <!-- OUTPUT TABLE -->
         <div id="output">
-            <div id="output-empty">In attesa di elaborazione...</div>
+            <div class="output-empty">Carica un file di prenotazioni (PDF, immagine, CSV o TXT) e premi «Processa».</div>
         </div>
 
     </div>
@@ -171,7 +171,7 @@
     </div>
     <div class="statusbar-item">
         <div class="statusbar-dot" id="dotApi"></div>
-        <span id="sbApi">API key non configurata</span>
+        <span id="sbApi">Verifica chiave ChatGPT…</span>
     </div>
     <div class="statusbar-item">
         <div class="statusbar-dot" id="dotFile"></div>
@@ -200,7 +200,7 @@
 <div class="modal-backdrop" id="noteModalBackdrop">
     <div class="modal">
         <h2>Note prenotazione</h2>
-        <textarea id="noteModalText" readonly style="background:#f9fafb; min-height:120px;"></textarea>
+        <textarea id="noteModalText" readonly></textarea>
         <div class="modal-footer">
             <button class="btn-modal-cancel" onclick="closeNoteModal()">Chiudi</button>
             <button class="btn-modal-confirm" onclick="copyNoteFromModal()">Copia</button>
@@ -210,15 +210,6 @@
 
 <script src="app.js"></script>
 <script>
-    // Aggiorna date badge
-    (function() {
-        const days = ['Domenica','Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato'];
-        const months = ['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'];
-        const now = new Date();
-        document.getElementById('date-badge').textContent =
-            days[now.getDay()] + ' ' + now.getDate() + ' ' + months[now.getMonth()] + ' ' + now.getFullYear();
-    })();
-
     // Toggle template box dalla sidebar
     function toggleTemplateBox() {
         const box = document.getElementById('templateBox');

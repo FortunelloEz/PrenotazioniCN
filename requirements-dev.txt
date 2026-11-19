@@ -1,0 +1,5 @@
+# Solo per sviluppo e verifiche (non servono nell'installer)
+-r requirements.txt
+pytest
+ruff
+pyinstaller

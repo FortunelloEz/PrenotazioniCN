@@ -1,13 +1,12 @@
 # main.py
 from pathlib import Path
-from datetime import date, datetime
 import webview
 from tkinter.filedialog import askopenfilename
 import json
 import webbrowser
 import logicaBE
-from logicaBE import (load_template, load_config, save_config, CONFIG_DIR, TEMPLATE_FILE,
-                      check_license, save_license_token)
+from logicaBE import (load_template, load_config, update_config, check_license, save_license_token,
+                      ConfigError, TemplateError)
 import base64
 import sys
 import subprocess
@@ -67,52 +66,86 @@ class Api:
         try:
             records = json.loads(data_json or "[]")
         except Exception as e:
-            print("Errore parsing JSON in ricalcola_messaggi:", e)
-            return []
+            # Mai restituire [] qui: il frontend svuoterebbe la tabella.
+            raise ValueError(f"Dati della tabella non validi: {e}") from e
+        if not isinstance(records, list):
+            raise ValueError("Dati della tabella non validi.")
 
         enriched = logicaBE.recompute_records(records)
         return enriched
 
-    def set_api_key(self, key: str) -> str:
+    def set_api_key(self, key: str) -> dict:
         key = (key or "").strip()
-        cfg = load_config()
-        cfg["api_key_encrypted"] = base64.b64encode(key.encode()).decode()
-        save_config(cfg)
-        logicaBE.reset_client()   # ← aggiunta
-        return "Chiave salvata correttamente. Riavviare l'app"
+        if not key:
+            return {"ok": False, "error": "Chiave vuota: nessuna modifica applicata."}
+        try:
+            # NB: base64 non è cifratura (vedi CLAUDE.md, punto aperto). Formato invariato per compatibilità.
+            update_config({"api_key_encrypted": base64.b64encode(key.encode()).decode()})
+        except ConfigError as e:
+            return {"ok": False, "error": str(e)}
+        logicaBE.reset_client()  # la prossima elaborazione usa già la nuova chiave
+        return {"ok": True, "message": "Chiave ChatGPT salvata: è già attiva."}
 
     def get_template(self) -> str:
         return load_template()
 
-    def set_runtime_template(self, text: str) -> str:
-        logicaBE.set_runtime_template(text)
-        return "Template di sessione aggiornato."
+    def get_template_info(self) -> dict:
+        """Variabili ammesse (unico elenco nel backend) per i testi di aiuto."""
+        return {"fields": list(logicaBE.TEMPLATE_FIELDS)}
 
-    def reset_template(self) -> str:
-        if TEMPLATE_FILE.exists():
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup = TEMPLATE_FILE.with_name(f"template_backup_{ts}.txt")
-            TEMPLATE_FILE.replace(backup)
-        return "Template ripristinato al default."
+    def set_runtime_template(self, text: str) -> dict:
+        errors = logicaBE.validate_template(text)
+        if errors:
+            return {"ok": False, "error": " ".join(errors)}
+        logicaBE.set_runtime_template(text)
+        return {"ok": True, "message": "Template di sessione applicato (non salvato come predefinito)."}
+
+    def reset_template(self) -> dict:
+        try:
+            logicaBE.reset_template_to_default()
+        except (TemplateError, OSError) as e:
+            return {"ok": False, "error": f"Ripristino non riuscito: {e}"}
+        return {"ok": True, "message": "Template ripristinato a quello di fabbrica (il precedente è nei backup)."}
 
     def set_superb_session(self, session: str, restaurant_id: str) -> dict:
         session       = (session or "").strip()
         restaurant_id = (restaurant_id or "").strip()
         if not session:
             return {"ok": False, "error": "Sessione vuota."}
-        cfg = load_config()
-        cfg["superb_session"]       = session
+        changes = {"superb_session": session}
         if restaurant_id:
-            cfg["superb_restaurant_id"] = restaurant_id
-        save_config(cfg)
+            changes["superb_restaurant_id"] = restaurant_id
+        try:
+            update_config(changes)
+        except ConfigError as e:
+            return {"ok": False, "error": str(e)}
         return {"ok": True}
 
     def get_superb_config(self) -> dict:
         cfg = load_config()
         return {
-            "has_session":   bool(cfg.get("superb_session", "").strip()),
-            "restaurant_id": cfg.get("superb_restaurant_id", ""),
+            "has_session":   bool(str(cfg.get("superb_session") or "").strip()),
+            "restaurant_id": str(cfg.get("superb_restaurant_id") or ""),
         }
+
+    def get_stato_app(self) -> dict:
+        """Stato reale per la barra in basso (prima i testi erano fissi nell'HTML)."""
+        cfg = load_config()
+        has_key = bool(str(cfg.get("api_key_encrypted") or "").strip()) or bool(logicaBE.load_api_key_legacy())
+        return {
+            "api_key": has_key,
+            "license_expires": str(cfg.get("license_expires") or ""),
+            "has_license": bool(str(cfg.get("license_token") or "").strip()),
+            "config_warning": logicaBE.get_config_warning(),
+        }
+
+    def chiudi_finestra(self) -> dict:
+        try:
+            for w in list(webview.windows):
+                w.destroy()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def processa_superb(self, date_str: str, giorno: str | None = None) -> list:
         enriched, html_path = logicaBE.main_superb(date_str, giorno or None)
@@ -127,27 +160,21 @@ class Api:
 
     def get_license_status(self) -> dict:
         cfg = load_config()
-        token = cfg.get("license_token", "")
-        expires = cfg.get("license_expires", "")
+        token = str(cfg.get("license_token") or "")
+        expires = str(cfg.get("license_expires") or "")
         if not token:
             return {"has_license": False, "expires": ""}
         return {"has_license": True, "expires": expires}
 
-    def set_template(self, text: str) -> str:
+    def set_template(self, text: str) -> dict:
         text = (text or "").strip()
-        if not text:
-            return "Template vuoto: nessuna modifica applicata."
-
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-        # backup se esiste template corrente
-        if TEMPLATE_FILE.exists():
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup = TEMPLATE_FILE.with_name(f"template_{ts}.bak.txt")
-            TEMPLATE_FILE.replace(backup)
-
-        TEMPLATE_FILE.write_text(text, encoding="utf-8")
-        return "Template aggiornato."
+        try:
+            logicaBE.save_template(text)
+        except TemplateError as e:
+            return {"ok": False, "error": str(e)}
+        except OSError as e:
+            return {"ok": False, "error": f"Impossibile salvare il template: {e}"}
+        return {"ok": True, "message": "Template predefinito salvato (il precedente è nei backup)."}
     def scegli_file(self) -> str:
         path = askopenfilename(
             title="Seleziona file",
@@ -186,9 +213,10 @@ class Api:
                 print("Errore nel parsing del JSON da frontend:", e)
                 return "Errore: dati non validi dalla GUI (JSON malformato)."
 
-            # Se non abbiamo ancora un path, creiamo un nome di default
+            # Se non abbiamo ancora un path, stesso file usato dall'elaborazione
+            # (prima era relativo alla cartella corrente, che può essere qualsiasi)
             if self.last_html_path is None:
-                self.last_html_path = Path("prenotazioni_wa.html")
+                self.last_html_path = logicaBE.BASE_DIR / "prenotazioni_wa.html"
 
             logicaBE.save_html(records, self.last_html_path)
             webbrowser.open(self.last_html_path.as_uri())
