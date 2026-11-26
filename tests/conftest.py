@@ -116,6 +116,8 @@ def fake_http(monkeypatch):
 
         monkeypatch.setattr(L._requests, "get", _get)
         monkeypatch.setattr(L._requests, "post", _post)
+        # Indirizzo finto: quello vero non è nel codice (vedi PRENOTAZIONICN_LICENSE_URL).
+        monkeypatch.setattr(L, "LICENSE_SERVER_URL", "https://licenze.example.invalid")
         return chiamate
     return _install
 

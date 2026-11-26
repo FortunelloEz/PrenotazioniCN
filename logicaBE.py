@@ -149,7 +149,9 @@ import hashlib
 from datetime import datetime
 import requests as _requests
 
-LICENSE_SERVER_URL = ""
+# L'indirizzo del server licenze non sta nel codice (repository condiviso): si legge dalla variabile
+# d'ambiente PRENOTAZIONICN_LICENSE_URL. Senza, la validazione online risponde «server non configurato».
+LICENSE_SERVER_URL = os.environ.get("PRENOTAZIONICN_LICENSE_URL", "").strip()
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.strip().encode()).hexdigest()
@@ -160,6 +162,8 @@ def validate_license_online(token: str) -> dict:
       { "valid": bool, "expires": "YYYY-MM-DD" oppure None }
     In caso di errore di rete o risposta malformata ritorna { "valid": False, "error": "..." }
     """
+    if not LICENSE_SERVER_URL:
+        return {"valid": False, "error": "Server licenze non configurato (PRENOTAZIONICN_LICENSE_URL)."}
     try:
         r = _requests.post(
             LICENSE_SERVER_URL,

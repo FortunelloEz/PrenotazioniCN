@@ -323,7 +323,7 @@ def start():
     # Il sistema licenze resta tutto nel codice ma non blocca più l'avvio e non contatta
     # più il server. Come funzionava:
     #   - genera_token.py crea i codici (in tokens_generati.json); hash + scadenza vanno
-    #     caricati a mano sul server licenze (logicaBE.LICENSE_SERVER_URL);
+    #     caricati a mano sul server licenze (variabile PRENOTAZIONICN_LICENSE_URL);
     #   - all'avvio check_license() manda l'hash del codice salvato in config e riceve
     #     {valid, expires}; verifica online al massimo una volta al giorno, offline vale la
     #     scadenza in cache; senza licenza valida si apre assets/license.html.

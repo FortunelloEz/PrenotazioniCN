@@ -116,3 +116,12 @@ def test_inserimento_token_non_valido_non_scrive(cfg_dir, fake_http, api):
     res = api.insert_license("SBAGLIATO")
     assert res["ok"] is False
     assert _letto(cfg_dir)["license_token"] == "VECCHIO"
+
+
+def test_senza_indirizzo_server_nessuna_chiamata(monkeypatch, fake_http):
+    """L'indirizzo del server licenze non è nel codice: senza variabile d'ambiente non si chiama nessuno."""
+    chiamate = fake_http()
+    monkeypatch.setattr(L, "LICENSE_SERVER_URL", "")
+    r = L.validate_license_online("QUALSIASI")
+    assert r["valid"] is False and "non configurato" in r["error"]
+    assert chiamate == []
