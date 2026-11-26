@@ -42,3 +42,6 @@ prenotazioni_wa.html
 
 # --- Prodotti delle verifiche (screenshot, report temporanei) ---
 tests/_out/
+
+# --- Regole di lavoro locali (solo su questo PC) ---
+CLAUDE.md

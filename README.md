@@ -44,4 +44,3 @@ node tools/verifica_visiva.mjs
 ```
 I test non usano la rete: OpenAI, Superb e WhatsApp sono simulati e i dati sono inventati.
 
-Le regole di lavoro complete sono in `CLAUDE.md`.
