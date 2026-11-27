@@ -84,5 +84,5 @@ npx eslint assets tools
 node tools/verifica_visiva.mjs
 ```
 I test non usano la rete: OpenAI, Superb e WhatsApp sono simulati e i dati sono inventati.
-Qualità dell'estrazione con LLM finto (deve dare 100%): `.venvScriptspython toolsqualita_estrazione.py`.
+Qualità dell'estrazione con LLM finto (deve dare 100%): `.venv\Scripts\python tools\qualita_estrazione.py`.
 
